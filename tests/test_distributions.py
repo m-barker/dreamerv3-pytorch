@@ -1,6 +1,7 @@
 import torch
 
 from dreamer.distributions.dist_utils import symexp, symlog
+from dreamer.distributions.distributions import OneHotDist
 
 
 def test_symlog():
@@ -29,3 +30,34 @@ def test_inverse_equal():
     symlog_x = symlog(x)
     symexp_symlog_x = symexp(symlog_x)
     assert torch.allclose(x, symexp_symlog_x, atol=1e-5)
+
+
+def test_one_hot_dist_shapes():
+    """Tests correctness of the mode and sample shapes of the
+    one-hot distribution.
+    """
+    batch_shape = (10, 20)
+    num_categories = (5,)
+    sample_shape = (100,)
+    dist = OneHotDist(logits=torch.randn((batch_shape) + num_categories))
+    mode = dist.mode()
+    sample = dist.sample(sample_shape=sample_shape)
+    assert mode.shape == (batch_shape) + (num_categories)
+    assert sample.shape == (sample_shape) + (batch_shape) + (num_categories)
+
+
+def test_one_hot_unimix():
+    """Tests the correctness of the uniform mixing functionality for the one-
+    hot categorical distribution.
+    """
+
+    logits = torch.Tensor([[100.0, 0.0, 0.0, 0.0]])
+    full_mix_dist = OneHotDist(logits=logits, unimix_ratio=1.0)
+    no_mix_dist = OneHotDist(logits=logits, unimix_ratio=0.0)
+    half_mix_dist = OneHotDist(logits=logits, unimix_ratio=0.5)
+
+    assert torch.allclose(full_mix_dist.probs, torch.Tensor([[0.25, 0.25, 0.25, 0.25]]))
+    assert torch.allclose(no_mix_dist.probs, torch.Tensor([[1.0, 0.0, 0.0, 0.0]]))
+    assert torch.allclose(
+        half_mix_dist.probs, torch.Tensor([[0.625, 0.125, 0.125, 0.125]])
+    )
