@@ -65,3 +65,59 @@ class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
             probs = probs[None]
         sample += probs - probs.detach()
         return sample
+
+
+class MSEDist:
+    def __init__(self, mode: torch.Tensor, agg: str = "sum"):
+        """A proxy mean squared error distribution used to allow
+        for the use of the same interface for all other network
+        distribution outputs I.e., loss = -dist.log_prob(value).
+
+        Args:
+            mode (torch.Tensor): The output of the decoder network.
+            Used to proxy the mean/mode of the distribution. Can think
+            of it as a distribution with zero variance. Shape should
+            be (batch_length, batch_size, h, w, c) where h, w, c are the
+            height, width, and number of channels of the output respectively.
+
+            agg (str, optional): Aggregation metric across batch dimensions.
+            Can be either "mean" or "sum". Defaults to "sum".
+        """
+        self._mode = mode
+        self._agg = agg
+
+    def mode(self):
+        return self._mode
+
+    def mean(self):
+        return self._mode
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        """Calculates the mean squared error between the decoder output
+        and the target value. Log_prob is used to allow for the use of
+        the same interface for all other network distribution outputs.
+
+        Args:
+            value (torch.Tensor): The target value to calculate the
+            mean squared error against. Shape should be the same as
+            the mode.
+
+        Raises:
+            NotImplementedError: If the aggregation metric is not
+            either "mean" or "sum".
+
+        Returns:
+            torch.Tensor: The negative mean squared error loss. The
+            Tensor is of shape (batch_length, batch_size), with the
+            loss aggregated over the height, width, and channel dimensions.
+        """
+        assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
+        distance = (self._mode - value) ** 2
+        # [2:] to aggregate over pixels.
+        if self._agg == "mean":
+            loss = distance.mean(list(range(len(distance.shape)))[2:])
+        elif self._agg == "sum":
+            loss = distance.sum(list(range(len(distance.shape)))[2:])
+        else:
+            raise NotImplementedError(self._agg)
+        return -loss
