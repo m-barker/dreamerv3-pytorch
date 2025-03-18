@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 import torch.distributions as torchd
 
+from .dist_utils import symexp, symlog
+
 
 class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
     def __init__(
@@ -82,7 +84,15 @@ class MSEDist:
 
             agg (str, optional): Aggregation metric across batch dimensions.
             Can be either "mean" or "sum". Defaults to "sum".
+
+        Raises:
+            ValueError: If the mode shape is less than three dimensions.
         """
+
+        # Needed as we strip off the batch dimensions [2:]
+        if len(mode.shape) < 3:
+            raise ValueError("Mode shape must have at least three dimensions.")
+
         self._mode = mode
         self._agg = agg
 
@@ -106,12 +116,19 @@ class MSEDist:
             NotImplementedError: If the aggregation metric is not
             either "mean" or "sum".
 
+            ValueError: If the value shape is less than three dimensions.
+
         Returns:
             torch.Tensor: The negative mean squared error loss. The
             Tensor is of shape (batch_length, batch_size), with the
             loss aggregated over the height, width, and channel dimensions.
         """
         assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
+
+        # Needed as we strip off the batch dimensions
+        if len(value.shape) < 3:
+            raise ValueError("Value shape must have at least three dimensions.")
+
         distance = (self._mode - value) ** 2
         # [2:] to aggregate over pixels.
         if self._agg == "mean":
@@ -120,4 +137,97 @@ class MSEDist:
             loss = distance.sum(list(range(len(distance.shape)))[2:])
         else:
             raise NotImplementedError(self._agg)
+        return -loss
+
+
+class SymlogDist:
+    def __init__(
+        self, mode: torch.Tensor, dist: str = "mse", agg: str = "sum", tol: float = 1e-8
+    ):
+        """Symlog proxy distribution to enable the use of the same API as actual distributions
+        when calculating the world model's losses. In reality, this is either the mean
+        squared error or mean absolute error between the decoder's outputs and the target.
+
+        This is used for the vector components of the world model's output; where the output
+        of the network is first passed through the symlog function. This is used to ensure that
+
+        Args:
+            mode (torch.Tensor): The output of the decoder network. Used to proxy the mean/mode
+            of the 'distribution'. Tensor of shape (batch_length, batch_size, D) where D is the
+            dimensionality of the vector that is being reconstructed.
+
+            dist (str, optional): Distance metric to use between predicted and actual.
+            Defaults to "mse". Must be either "mse" or "abs" (mean squared error or mean
+            absolute error).
+
+            agg (str, optional): Aggregation metric to use for the loss across vector dimensions.
+            Defaults to "sum". Must be either "mean" or "sum".
+
+            tol (float, optional): If any distance is less than this tolerance, set the
+            distance to zero. Defaults to 1e-8.
+
+        Raises:
+            ValueError: If the mode shape is less than three dimensions.
+
+        """
+
+        # Needed as strip off the batch dimensions [2:]
+        if len(mode.shape) < 3:
+            raise ValueError("Mode shape must have at least three dimensions.")
+
+        self._mode = mode
+        self._dist = dist
+        self._agg = agg
+        self._tol = tol
+
+    def mode(self) -> torch.Tensor:
+        """Returns the symexp transformation as all inputs to the vector encoder are first
+        transformed via the symlog function, so this maps to the original data space."""
+        return symexp(self._mode)
+
+    def mean(self) -> torch.Tensor:
+        return symexp(self._mode)
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        """Calculates the mean squared error or mean absolute error between the decoder output
+        and the target value. Log_prob is used to allow for the use of the same interface for
+        all other network distribution outputs when computing the world model's loss.
+
+        Args:
+            value (torch.Tensor): The target value (i.e., the ground truth vector observation)
+
+        Raises:
+            NotImplementedError: If incorrect distance metric or aggregation metric is provided.
+
+            ValueError: If the value shape is less than 3 dimensions.
+
+        Returns:
+            torch.Tensor: The negative mean squared error or mean absolute error loss. The
+            Tensor is of shape (batch_length, batch_size), with the loss aggregated over the
+            vector dimensions, using the given aggregation metric.
+        """
+        assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
+
+        # Needed as strip off the batch dimensions [2:]
+        if len(value.shape) < 3:
+            raise ValueError("Value shape must have at least three dimensions.")
+
+        if self._dist == "mse":
+            distance = (self._mode - symlog(value)) ** 2.0
+            distance = torch.where(distance < self._tol, 0, distance)
+        elif self._dist == "abs":
+            distance = torch.abs(self._mode - symlog(value))
+            distance = torch.where(distance < self._tol, 0, distance)
+        else:
+            raise NotImplementedError(self._dist)
+
+        # [2:] to aggregate over vector dimensions, i.e., strip off the
+        # batch_length and batch_size dimensions.
+        if self._agg == "mean":
+            loss = distance.mean(list(range(len(distance.shape)))[2:])
+        elif self._agg == "sum":
+            loss = distance.sum(list(range(len(distance.shape)))[2:])
+        else:
+            raise NotImplementedError(self._agg)
+
         return -loss

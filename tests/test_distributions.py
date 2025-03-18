@@ -1,7 +1,7 @@
 import torch
 
 from dreamer.distributions.dist_utils import symexp, symlog
-from dreamer.distributions.distributions import OneHotDist, MSEDist
+from dreamer.distributions.distributions import OneHotDist, MSEDist, SymlogDist
 
 
 def test_symlog():
@@ -77,8 +77,8 @@ def test_mse_values():
     """Checks the MSE caluclation values, for both summation and
     mean aggregation"""
 
-    decoder_output = torch.Tensor([[[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]])
-    true_values = torch.Tensor([[[[2, 3, 4], [5, 6, 7], [8, 9, 10]]]])
+    decoder_output = torch.Tensor([[[[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]]])
+    true_values = torch.Tensor([[[[[2, 3, 4], [5, 6, 7], [8, 9, 10]]]]])
     mse_dist_sum = MSEDist(decoder_output, agg="sum")
     mse_dist_mean = MSEDist(decoder_output, agg="mean")
 
@@ -87,3 +87,53 @@ def test_mse_values():
 
     assert torch.allclose(loss_sum, torch.Tensor([[-9]]))
     assert torch.allclose(loss_mean, torch.Tensor([[-1]]))
+
+
+def test_symlog_dist_shapes():
+    """Tests that the aggregation and distance metric calculations
+    of the symlog dist preserves the correct shapes"""
+
+    # (batch_length, batch_size, D)
+    decoder_output = torch.randn((10, 5, 20))
+    symlog_dist = SymlogDist(decoder_output)
+    loss = symlog_dist.log_prob(torch.randn((10, 5, 20)))
+    assert loss.shape == (10, 5)
+
+
+def test_symlog_dist_values():
+    """Checks that the symlog distance metric is calculated correctly
+    for abs and mse, and for sum and mean aggregations
+    """
+
+    decoder_output = torch.Tensor(
+        [
+            [
+                [1, 2, 3, 4, 5, 6, 7],
+            ]
+        ]
+    )
+    # Symlog of true values is taken when calculating the loss
+    true_values = symexp(
+        torch.Tensor(
+            [
+                [
+                    [3, 4, 5, 6, 7, 8, 10],
+                ]
+            ]
+        )
+    )
+
+    symlog_dist_mse_sum = SymlogDist(decoder_output, dist="mse", agg="sum")
+    symlog_dist_mse_mean = SymlogDist(decoder_output, dist="mse", agg="mean")
+    symlog_dist_abs_sum = SymlogDist(decoder_output, dist="abs", agg="sum")
+    symlog_dist_abs_mean = SymlogDist(decoder_output, dist="abs", agg="mean")
+
+    loss_mse_sum = symlog_dist_mse_sum.log_prob(true_values)
+    loss_mse_mean = symlog_dist_mse_mean.log_prob(true_values)
+    loss_abs_sum = symlog_dist_abs_sum.log_prob(true_values)
+    loss_abs_mean = symlog_dist_abs_mean.log_prob(true_values)
+
+    assert torch.allclose(loss_mse_sum, torch.Tensor([[-33]]))
+    assert torch.allclose(loss_mse_mean, torch.Tensor([[-4.7143]]))
+    assert torch.allclose(loss_abs_sum, torch.Tensor([[-15]]))
+    assert torch.allclose(loss_abs_mean, torch.Tensor([[-2.14286]]))
