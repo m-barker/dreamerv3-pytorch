@@ -1,7 +1,39 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 import math
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from .shared import RMSNormWrapper
+
+
+class PadModule(nn.Module):
+    """
+    Torch Module Wrapper for adding padding to an input
+    """
+
+    def __init__(
+        self, pad_left: int, pad_right: int, pad_top: int, pad_bot: int
+    ) -> None:
+        super().__init__()
+        self._pad_left = pad_left
+        self._pad_right = pad_right
+        self._pad_top = pad_top
+        self._pad_bot = pad_bot
+
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Adds padding to the given input.
+
+        Args:
+            input_tensor (torch.Tensor of shape (..., H, W, C))
+        """
+
+        return F.pad(
+            input_tensor,
+            [self._pad_left, self._pad_right, self._pad_top, self._pad_bot],
+        )
 
 
 class CNNEncoder(nn.Module):
@@ -17,8 +49,12 @@ class CNNEncoder(nn.Module):
         stride: int,
         min_res: int,
         bias: bool,
-        layer_norm: bool,
+        norm: str,
         act_func: str,
+        max_pool: bool,
+        depth_mult: Tuple[int, ...],
+        max_pool_stride: Optional[int] = None,
+        max_pool_kernel: Optional[int] = None,
         dilation: int = 1,
     ) -> None:
         """
@@ -36,9 +72,16 @@ class CNNEncoder(nn.Module):
 
             bias (bool): whether to use a bias in the network
 
-            layer_norm (bool): whether to use layer normalisation
+            norm (str): whether to use normalisation, and the type of normalisation.
+                        At the moment, only does rms norm.
 
             act_func (str): string name of activation function. Must match a PyTorch function
+
+            max_pool (bool): whether to shrink dimensions using max pooling instead of
+                             striding. If true, ignores striding.
+
+            depth_mult (Tuple[int, ...]): the new depth at each layer of the network, fournd
+                                     by multiplying initial_depth by depth_mult[i]
 
             dilation (int, defaults to 1): dilation of the convolution operation.
         """
@@ -49,6 +92,12 @@ class CNNEncoder(nn.Module):
         assert image_shape[0] == image_shape[1], (
             f"Resolution must be square, provided shape: {image_shape}"
         )
+        if max_pool:
+            assert stride == 1, "Stride must be equal to 1 if doing max pooling"
+            assert max_pool_stride is not None
+            assert max_pool_kernel is not None
+
+        assert norm in ("none", "rms"), f"Unhandled norm method {norm} probided"
 
         self._image_shape = image_shape
         self._initial_depth = initial_depth
@@ -56,15 +105,74 @@ class CNNEncoder(nn.Module):
         self._stride = stride
         self._min_res = min_res
         self._use_bias = bias
-        self._do_layer_norm = layer_norm
+        self._norm = norm
         self._act_func_name = act_func
+        self._use_max_pool = max_pool
+        self._max_pool_stride = max_pool_stride
+        self._max_pool_kernel = max_pool_kernel
         self._dilation = dilation
 
         self._encoded_res = None
+        self._encoded_dim = None
+
+        self._depth_mults = depth_mult
 
         self._n_conv_layers = self._calculate_n_conv_layers()
 
-    def _calulate_same_padding(
+        assert len(self._depth_mults) == self._n_conv_layers
+
+        self._network = self._configure_network()
+
+    def _configure_network(self) -> nn.Sequential:
+        """
+        Configures and returns the CNN Encoder network
+        """
+
+        activation_function = getattr(nn, self._act_func_name)
+
+        current_in_ch = self._image_shape[-1]
+        current_res = self._image_shape[0]
+
+        layers = []
+        for layer in range(self._n_conv_layers):
+            pad_left, pad_right, pad_top, pad_bot = self._calculate_same_padding(
+                (current_res, current_res)
+            )
+            layers.append(PadModule(pad_left, pad_right, pad_top, pad_bot))
+            layers.append(
+                nn.Conv2d(
+                    current_in_ch,
+                    self._initial_depth * self._depth_mults[layer],
+                    self._kernel_size,
+                    self._stride,
+                    padding=0,  # We've already handled padding the JAX way
+                    dilation=self._dilation,
+                    bias=self._use_bias,
+                )
+            )
+            if self._use_max_pool and self._max_pool_kernel and self._max_pool_stride:
+                layers.append(
+                    nn.MaxPool2d(
+                        self._max_pool_kernel, self._max_pool_stride, padding=0
+                    )
+                )
+
+            if self._norm != "none":
+                if self._norm == "rms":
+                    # (B, C, H, W) -> (B, H, W, C)
+                    layers.append(
+                        RMSNormWrapper(
+                            self._initial_depth * self._depth_mults[layer],
+                            permute=[0, 2, 3, 1],
+                        )
+                    )
+            layers.append(activation_function())
+
+            current_res = self._calculate_output_dim(current_res)
+            current_in_ch = self._initial_depth * self._depth_mults[layer]
+        return nn.Sequential(*layers)
+
+    def _calculate_same_padding(
         self, input_size: Tuple[int, int]
     ) -> Tuple[int, int, int, int]:
         """
@@ -93,12 +201,15 @@ class CNNEncoder(nn.Module):
             )
             return total_pad
 
+        kernel = self._kernel_size
+        stride = self._stride
+
         total_width_padding = calc_half_pad(
-            input_size[0], self._kernel_size, self._stride, self._dilation
+            input_size[0], kernel, stride, self._dilation
         )
 
         total_height_padding = calc_half_pad(
-            input_size[1], self._kernel_size, self._stride, self._dilation
+            input_size[1], kernel, stride, self._dilation
         )
 
         left_pad, right_pad = total_width_padding // 2, total_width_padding // 2
@@ -122,20 +233,17 @@ class CNNEncoder(nn.Module):
             input_res (int): resolution before applying convolution
         """
 
-        pad_left, pad_right, pad_top, pad_bot_ = self._calulate_same_padding(
+        pad_left, pad_right, pad_top, pad_bot_ = self._calculate_same_padding(
             (input_res, input_res)
         )
         required_padding = pad_left + pad_right
+        kernel = self._max_pool_kernel if self._max_pool_kernel else self._kernel_size
+        stride = self._max_pool_stride if self._max_pool_stride else self._stride
 
         return math.floor(
             (
-                (
-                    input_res
-                    + required_padding
-                    - self._dilation * (self._kernel_size - 1)
-                    - 1
-                )
-                / self._stride
+                (input_res + required_padding - self._dilation * (kernel - 1) - 1)
+                / stride
             )
             + 1
         )
@@ -166,6 +274,12 @@ class CNNEncoder(nn.Module):
             current_res = new_res
 
         self._encoded_res = current_res
+        self._encoded_dim = (
+            self._encoded_res
+            * self._encoded_res
+            * self._initial_depth
+            * self._depth_mults[-1]
+        )
 
         return n_layers
 
@@ -180,3 +294,36 @@ class CNNEncoder(nn.Module):
                 "Encoded res should never be none as it is set in the constructor"
             )
         return self._encoded_res
+
+    @property
+    def encoded_dim(self) -> int:
+        """
+        Gets the total vector dimension of the encoder output
+        assuming output will be flattened.
+        """
+        if self._encoded_dim is None:
+            raise AttributeError(
+                "Encoded dim should never be none as it is set in the constructor"
+            )
+        return self._encoded_dim
+
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            images (torch.Tensor) of shape (B, T, H, W, C)
+        """
+        # Normalise to range [-0.5, 0.5]
+        images = images / 255 - 0.5
+
+        B, T, H, W, C = images.shape
+
+        # Reshape to (B*T, H, W, C)
+        images = images.reshape((B * T, H, W, C))
+        # (B*T, H, W, C) -> (B*T, C, H, W)
+        images = images.permute(0, 3, 1, 2)
+
+        output = self._network(images)
+        # (B*T, C, H, W) -> (B*T, -1)
+        output = output.reshape(B * T, -1)
+        # (B * T,  -1) -> (B, T, -1)
+        return output.reshape(B, T, -1)
