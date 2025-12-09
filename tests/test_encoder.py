@@ -1,6 +1,4 @@
 import sys
-
-print(sys.path)
 import torch
 from dreamer.networks.encoder import CNNEncoder
 
@@ -190,7 +188,7 @@ def test_encoder_foward_pass_shape():
         stride=1,
         min_res=4,
         bias=False,
-        norm="none",
+        norm="rms",
         act_func="ReLU",
         depth_mult=(2, 3, 4, 4),
         max_pool=True,
