@@ -1,8 +1,8 @@
 import sys
 
-print(sys.path)
 import torch
-from dreamer.networks.shared import RMSNormWrapper
+from dreamer.networks.shared import RMSNormWrapper, truncated_normal_weight_init
+from dreamer.networks.encoder import CNNEncoder
 
 
 def test_inverse_permute():
@@ -29,3 +29,39 @@ def test_inverse_permute():
     x = torch.randn((1, 2, 3, 4))
     y = norm(x)
     assert y.shape == x.shape
+
+
+def test_norm_weight_init():
+    permute = [0, 3, 2, 1]
+    norm = RMSNormWrapper(4, permute=permute)
+    norm.apply(truncated_normal_weight_init)
+    for name, param in norm.named_parameters():
+        assert torch.all(param == 1)
+
+
+def test_encoder_weight_init():
+    encoder = CNNEncoder(
+        image_shape=(64, 64, 3),
+        initial_depth=24,
+        kernel_size=3,
+        stride=1,
+        min_res=4,
+        bias=True,
+        norm="rms",
+        act_func="ReLU",
+        depth_mult=(2, 3, 4, 4),
+        max_pool=True,
+        max_pool_kernel=2,
+        max_pool_stride=2,
+        dilation=1,
+    )
+    encoder.apply(truncated_normal_weight_init)
+    for name, param in encoder.named_parameters():
+        if "rms" in name.lower() and "weight" in name:
+            assert torch.all(param == 1), f"{name} RMSNorm weight not ones"
+        elif "bias" in name.lower():
+            assert torch.all(param == 0)
+        elif "weight" in name:
+            max_val = param.abs().max().item()
+            # 2.3 as we scale [-2, 2] by 1.1368 * sqrt(1/something)
+            assert max_val <= 2.3, f"{name} exceeds truncation range: {max_val}"
