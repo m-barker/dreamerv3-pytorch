@@ -45,7 +45,8 @@ class OneHotDist(torchd.one_hot_categorical.OneHotCategorical):
         else:
             super().__init__(logits=logits, probs=probs)
 
-    def mode(self):
+    @property
+    def mode(self) -> torch.Tensor:
         """Returns the mode of the distribution in one-hot format.
 
         Returns:
@@ -231,3 +232,178 @@ class SymlogDist:
             raise NotImplementedError(self._agg)
 
         return -loss
+
+
+class TwoHotDist:
+    """
+    Two-hot distribution
+    """
+
+    def __init__(
+        self,
+        logits: torch.Tensor,
+        n_bins: int = 255,
+        min_bin_val: float = -20.0,
+        max_bin_val: float = 20.0,
+        symexp_bins: bool = True,
+    ) -> None:
+        """
+        Builds the bins of the two hot index.
+
+        Args:
+            logits (torch.Tensor) of shape (B, n_bins)
+
+            n_bins (int, optional) number of bins. Defaults
+            to 255.
+
+            min_bin_val (float, optional): minimum, non-transformed
+            bin value. Defaults to -20.0
+
+            max_bin_val (int, optional): maximum, non-transformed
+            bin value. Defaults to +20.0.
+
+            symexp_bins (bool, optional): whether to apply a symexp
+            transformation to the bin values, to make them exponentially
+            spaced. Defaults to True.
+
+        """
+        assert logits.shape[-1] == n_bins, (
+            f"Logits shape of {logits.shape} is inconsistent with the given number of bins {n_bins}"
+        )
+        self._logits = logits
+        self._probs = torch.softmax(logits, dim=-1)
+        self._n_bins = n_bins
+        self._min_bin_val = min_bin_val
+        self._max_bin_val = max_bin_val
+        self._symexp_bins = symexp_bins
+
+        self._bins = self._construct_bins()
+
+    def _construct_bins(self) -> torch.Tensor:
+        """
+        Builds the bins, given the information from the constructor
+        """
+
+        # We have to split this in two to ensure one of the bins has a
+        # value of zero, as done in the JAX official codebase
+
+        # Case with odd number of bins
+        if self._n_bins % 2 == 1:
+            lower_bins = torch.linspace(
+                self._min_bin_val, 0, (self._n_bins - 1) // 2 + 1, dtype=torch.float32
+            )
+            if self._symexp_bins:
+                lower_bins = symexp(lower_bins)
+
+            upper_bins = -torch.flip(lower_bins, [-1])
+            # We have flipped, so last bin is now 0, we already have a 0 so drop it
+            return torch.concatenate([lower_bins, upper_bins[:-1]], dim=-1)
+        else:
+            lower_bins = torch.linspace(
+                self._min_bin_val, 0, self._n_bins // 2, dtype=torch.float32
+            )
+            if self._symexp_bins:
+                lower_bins = symexp(lower_bins)
+
+            upper_bins = -torch.flip(lower_bins, [-1])
+            # For even bins, to keep symetry we have two bins that are zero
+            return torch.concatenate([lower_bins, upper_bins], dim=-1)
+
+    def predict(self, symlog_ret: bool = True) -> torch.Tensor:
+        """
+        Computes the weighted average of bins multiplied by their probabilities.
+        As with the official JAX implementation, uses a symetric sum to prevent
+        floating point errors from compounding. This is because the sum operation
+        goes left to right, meaning we start adding lots of large negative numbers
+        which can cause fp errors.
+
+        Args:
+            symlog_ret (bool, optional): whether to return the values back to their original
+            data dim by passing through the symlog function. Defaults to true
+        """
+
+        if self._n_bins % 2 == 1:
+            midpoint = (self._n_bins - 1) // 2
+            lower_probs = self._probs[..., :midpoint]
+            mid_prob = self._probs[..., midpoint : midpoint + 1]
+            upper_probs = self._probs[..., midpoint + 1 :]
+            lower_bins = self._bins[..., :midpoint]
+            mid_bin = self._bins[..., midpoint : midpoint + 1]
+            upper_bins = self._bins[..., midpoint + 1 :]
+
+            # Expected value calculation
+            # We flip the lower ones as sum goes left to right. So, we want always add
+            # a negative magnitude with the corresponding positive magnitude, to reduce
+            # floating point errors.
+            weighted_avg = (mid_prob * mid_bin).sum(-1) + (
+                (lower_probs * lower_bins).flip([-1]) + (upper_probs * upper_bins)
+            ).sum(-1)
+        else:
+            midpoint = (self._n_bins) // 2
+            lower_probs = self._probs[..., :midpoint]
+            upper_probs = self._probs[..., midpoint:]
+            lower_bins = self._bins[..., :midpoint]
+            upper_bins = self._bins[..., midpoint:]
+
+            weighted_avg = (
+                (lower_probs * lower_bins).flip([-1]) + (upper_probs * upper_bins)
+            ).sum(-1)
+
+        if symlog_ret:
+            return symlog(weighted_avg)
+        return weighted_avg
+
+    def log_prob(self, target: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the log probability of the target given the networks
+        probabilities.
+
+        Target is the true values, i.e., not passed through symexp
+
+        Args:
+           target (torch.Tensor): of shape (B, 1)
+
+        Returns:
+           log_prob (torch.Tensor) of shape (B)
+        """
+        assert len(target.shape) == 2, (
+            f"TwoHotDist target has incorrect shape of {target.shape}"
+        )
+        with torch.no_grad():
+            target = symexp(target)
+
+        # Find the index of the lowest bin
+        # [1, 1, 1, 1, 0, 0, 0 , ...] sum of ones is 4, -1 to convert to idx
+        lower_bin_idx = (self._bins <= target).to(torch.int32).sum(-1) - 1
+        upper_bin_idx = self._n_bins - (self._bins > target).to(torch.int32).sum(-1)
+
+        # Clip lower to 0, if target is smaller than all bins
+        # Clip upper to max_idx, if target is larger than all bins
+        lower_bin_idx = torch.clip(lower_bin_idx, 0, self._n_bins - 1)
+        upper_bin_idx = torch.clip(upper_bin_idx, 0, self._n_bins - 1)
+
+        # Only happens (I think) when target is > max bin value
+        equal = lower_bin_idx == upper_bin_idx
+
+        # Set distance to 1 if max upper bin
+        dist_to_below = torch.where(
+            equal, 1, torch.abs(self._bins[lower_bin_idx] - target.squeeze())
+        )
+        dist_to_above = torch.where(
+            equal, 1, torch.abs(self._bins[upper_bin_idx] - target.squeeze())
+        )
+
+        total_dist = dist_to_below + dist_to_above
+        # further from above = more weight to below
+        # and vice versa
+        weight_below = (dist_to_above / total_dist).unsqueeze(-1)
+        weight_above = (dist_to_below / total_dist).unsqueeze(-1)
+
+        one_hot_target = (
+            F.one_hot(lower_bin_idx, num_classes=self._n_bins) * weight_below
+            + F.one_hot(upper_bin_idx, num_classes=self._n_bins) * weight_above
+        )
+
+        # Get log probs in stable way
+        log_pred = self._logits - torch.logsumexp(self._logits, -1, keepdim=True)
+        return (one_hot_target * log_pred).sum(-1)

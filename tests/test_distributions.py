@@ -1,7 +1,12 @@
 import torch
 
 from dreamer.distributions.dist_utils import symexp, symlog
-from dreamer.distributions.distributions import OneHotDist, MSEDist, SymlogDist
+from dreamer.distributions.distributions import (
+    OneHotDist,
+    MSEDist,
+    SymlogDist,
+    TwoHotDist,
+)
 
 
 def test_symlog():
@@ -40,7 +45,7 @@ def test_one_hot_dist_shapes():
     num_categories = (5,)
     sample_shape = (100,)
     dist = OneHotDist(logits=torch.randn((batch_shape) + num_categories))
-    mode = dist.mode()
+    mode = dist.mode
     sample = dist.sample(sample_shape=sample_shape)
     assert mode.shape == (batch_shape) + (num_categories)
     assert sample.shape == (sample_shape) + (batch_shape) + (num_categories)
@@ -137,3 +142,14 @@ def test_symlog_dist_values():
     assert torch.allclose(loss_mse_mean, torch.Tensor([[-4.7143]]))
     assert torch.allclose(loss_abs_sum, torch.Tensor([[-15]]))
     assert torch.allclose(loss_abs_mean, torch.Tensor([[-2.14286]]))
+
+
+def test_twohot_shapes():
+    logits = torch.randn((16, 255))
+    dist = TwoHotDist(logits)
+
+    target = torch.randn((16, 1))
+
+    res = dist.log_prob(target)
+
+    assert res.shape == (16,)
