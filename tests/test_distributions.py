@@ -6,6 +6,7 @@ from dreamer.distributions.distributions import (
     MSEDist,
     SymlogDist,
     TwoHotDist,
+    BoundedNormalDist,
 )
 
 
@@ -72,26 +73,26 @@ def test_mse_dist_shapes():
     """Tests the the aggregation of the MSE preserves the
     correct shapes"""
 
-    decoder_output = torch.randn((10, 5, 64, 64, 3))
+    decoder_output = torch.randn((10, 64, 64, 3))
     mse_dist = MSEDist(decoder_output)
-    loss = mse_dist.log_prob(torch.randn((10, 5, 64, 64, 3)))
-    assert loss.shape == (10, 5)
+    loss = mse_dist.loss(torch.randn((10, 64, 64, 3)))
+    assert loss.shape == (10,)
 
 
 def test_mse_values():
     """Checks the MSE caluclation values, for both summation and
     mean aggregation"""
 
-    decoder_output = torch.Tensor([[[[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]]])
-    true_values = torch.Tensor([[[[[2, 3, 4], [5, 6, 7], [8, 9, 10]]]]])
+    decoder_output = torch.Tensor([[[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]])
+    true_values = torch.Tensor([[[[2, 3, 4], [5, 6, 7], [8, 9, 10]]]])
     mse_dist_sum = MSEDist(decoder_output, agg="sum")
     mse_dist_mean = MSEDist(decoder_output, agg="mean")
 
-    loss_sum = mse_dist_sum.log_prob(true_values)
-    loss_mean = mse_dist_mean.log_prob(true_values)
+    loss_sum = mse_dist_sum.loss(true_values)
+    loss_mean = mse_dist_mean.loss(true_values)
 
-    assert torch.allclose(loss_sum, torch.Tensor([[-9]]))
-    assert torch.allclose(loss_mean, torch.Tensor([[-1]]))
+    assert torch.allclose(loss_sum, torch.Tensor([-9]))
+    assert torch.allclose(loss_mean, torch.Tensor([-1]))
 
 
 def test_symlog_dist_shapes():
@@ -99,10 +100,10 @@ def test_symlog_dist_shapes():
     of the symlog dist preserves the correct shapes"""
 
     # (batch_length, batch_size, D)
-    decoder_output = torch.randn((10, 5, 20))
+    decoder_output = torch.randn((10, 20))
     symlog_dist = SymlogDist(decoder_output)
-    loss = symlog_dist.log_prob(torch.randn((10, 5, 20)))
-    assert loss.shape == (10, 5)
+    loss = symlog_dist.loss(torch.randn((10, 20)))
+    assert loss.shape == (10,)
 
 
 def test_symlog_dist_values():
@@ -112,18 +113,14 @@ def test_symlog_dist_values():
 
     decoder_output = torch.Tensor(
         [
-            [
-                [1, 2, 3, 4, 5, 6, 7],
-            ]
+            [1, 2, 3, 4, 5, 6, 7],
         ]
     )
     # Symlog of true values is taken when calculating the loss
     true_values = symexp(
         torch.Tensor(
             [
-                [
-                    [3, 4, 5, 6, 7, 8, 10],
-                ]
+                [3, 4, 5, 6, 7, 8, 10],
             ]
         )
     )
@@ -133,10 +130,10 @@ def test_symlog_dist_values():
     symlog_dist_abs_sum = SymlogDist(decoder_output, dist="abs", agg="sum")
     symlog_dist_abs_mean = SymlogDist(decoder_output, dist="abs", agg="mean")
 
-    loss_mse_sum = symlog_dist_mse_sum.log_prob(true_values)
-    loss_mse_mean = symlog_dist_mse_mean.log_prob(true_values)
-    loss_abs_sum = symlog_dist_abs_sum.log_prob(true_values)
-    loss_abs_mean = symlog_dist_abs_mean.log_prob(true_values)
+    loss_mse_sum = symlog_dist_mse_sum.loss(true_values)
+    loss_mse_mean = symlog_dist_mse_mean.loss(true_values)
+    loss_abs_sum = symlog_dist_abs_sum.loss(true_values)
+    loss_abs_mean = symlog_dist_abs_mean.loss(true_values)
 
     assert torch.allclose(loss_mse_sum, torch.Tensor([[-33]]))
     assert torch.allclose(loss_mse_mean, torch.Tensor([[-4.7143]]))
@@ -150,6 +147,36 @@ def test_twohot_shapes():
 
     target = torch.randn((16, 1))
 
-    res = dist.log_prob(target)
+    res = dist.loss(target)
 
     assert res.shape == (16,)
+
+
+def test_bounded_normal_shapes():
+    mean = torch.randn((16, 4))
+    std = torch.randn((16, 4))
+
+    dist = BoundedNormalDist(mean, std, 0.0, 1.0)
+    sample = dist.sample()
+
+    assert sample.shape == (16, 4)
+
+    entropy = dist.entropy()
+    assert entropy.shape == (16, 4)
+
+    vals = torch.randn((16, 4))
+    log_prob = dist.log_prob(vals)
+
+    assert log_prob.shape == (16, 4)
+
+
+def test_bounded_normal_bounds():
+    mean = torch.randn((16, 4))
+    std = torch.randn((16, 4))
+
+    dist = BoundedNormalDist(mean, std, 0.0, 1.0)
+
+    stdev = dist._dist.stddev
+
+    assert torch.all(stdev >= 0.0)
+    assert torch.all(stdev <= 1.0)

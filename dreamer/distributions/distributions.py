@@ -1,4 +1,9 @@
-from typing import Optional
+"""
+All distributions used for calculating losses take in logits of shape
+(Batch, N), and return a loss of shape (Batch, )
+"""
+
+from typing import Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -80,19 +85,21 @@ class MSEDist:
             mode (torch.Tensor): The output of the decoder network.
             Used to proxy the mean/mode of the distribution. Can think
             of it as a distribution with zero variance. Shape should
-            be (batch_length, batch_size, h, w, c) where h, w, c are the
+            be (batch_length, h, w, c) where h, w, c are the
             height, width, and number of channels of the output respectively.
 
             agg (str, optional): Aggregation metric across batch dimensions.
             Can be either "mean" or "sum". Defaults to "sum".
 
         Raises:
-            ValueError: If the mode shape is less than three dimensions.
+            ValueError: If the mode shape doesn't have 4 dimensions.
         """
 
         # Needed as we strip off the batch dimensions [2:]
-        if len(mode.shape) < 3:
-            raise ValueError("Mode shape must have at least three dimensions.")
+        if len(mode.shape) != 4:
+            raise ValueError(
+                f"This is only used for images, must have 4 dims, given : {mode.shape}"
+            )
 
         self._mode = mode
         self._agg = agg
@@ -103,7 +110,7 @@ class MSEDist:
     def mean(self):
         return self._mode
 
-    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+    def loss(self, value: torch.Tensor) -> torch.Tensor:
         """Calculates the mean squared error between the decoder output
         and the target value. Log_prob is used to allow for the use of
         the same interface for all other network distribution outputs.
@@ -117,25 +124,27 @@ class MSEDist:
             NotImplementedError: If the aggregation metric is not
             either "mean" or "sum".
 
-            ValueError: If the value shape is less than three dimensions.
+            ValueError: If the value shape is not equal to 4 dimensions.
 
         Returns:
             torch.Tensor: The negative mean squared error loss. The
-            Tensor is of shape (batch_length, batch_size), with the
+            Tensor is of shape (batch_size, ), with the
             loss aggregated over the height, width, and channel dimensions.
         """
         assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
 
         # Needed as we strip off the batch dimensions
-        if len(value.shape) < 3:
-            raise ValueError("Value shape must have at least three dimensions.")
+        if len(value.shape) != 4:
+            raise ValueError(
+                f"Value shape must have at four dimensions. Given : {value.shape}"
+            )
 
         distance = (self._mode - value) ** 2
-        # [2:] to aggregate over pixels.
+        # [1:] to aggregate over pixels.
         if self._agg == "mean":
-            loss = distance.mean(list(range(len(distance.shape)))[2:])
+            loss = distance.mean(list(range(len(distance.shape)))[1:])
         elif self._agg == "sum":
-            loss = distance.sum(list(range(len(distance.shape)))[2:])
+            loss = distance.sum(list(range(len(distance.shape)))[1:])
         else:
             raise NotImplementedError(self._agg)
         return -loss
@@ -154,7 +163,7 @@ class SymlogDist:
 
         Args:
             mode (torch.Tensor): The output of the decoder network. Used to proxy the mean/mode
-            of the 'distribution'. Tensor of shape (batch_length, batch_size, D) where D is the
+            of the 'distribution'. Tensor of shape (B, D) where D is the
             dimensionality of the vector that is being reconstructed.
 
             dist (str, optional): Distance metric to use between predicted and actual.
@@ -168,13 +177,15 @@ class SymlogDist:
             distance to zero. Defaults to 1e-8.
 
         Raises:
-            ValueError: If the mode shape is less than three dimensions.
+            ValueError: If the mode shape is not equal to 2 dimensions.
 
         """
 
         # Needed as strip off the batch dimensions [2:]
-        if len(mode.shape) < 3:
-            raise ValueError("Mode shape must have at least three dimensions.")
+        if len(mode.shape) != 2:
+            raise ValueError(
+                f"Mode shape must have two dimensions. Given: {mode.shape}"
+            )
 
         self._mode = mode
         self._dist = dist
@@ -189,7 +200,7 @@ class SymlogDist:
     def mean(self) -> torch.Tensor:
         return symexp(self._mode)
 
-    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+    def loss(self, value: torch.Tensor) -> torch.Tensor:
         """Calculates the mean squared error or mean absolute error between the decoder output
         and the target value. Log_prob is used to allow for the use of the same interface for
         all other network distribution outputs when computing the world model's loss.
@@ -210,8 +221,10 @@ class SymlogDist:
         assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
 
         # Needed as strip off the batch dimensions [2:]
-        if len(value.shape) < 3:
-            raise ValueError("Value shape must have at least three dimensions.")
+        if len(value.shape) != 2:
+            raise ValueError(
+                f"Value shape must have two dimensions. Given: {value.shape}"
+            )
 
         if self._dist == "mse":
             distance = (self._mode - symlog(value)) ** 2.0
@@ -222,12 +235,12 @@ class SymlogDist:
         else:
             raise NotImplementedError(self._dist)
 
-        # [2:] to aggregate over vector dimensions, i.e., strip off the
-        # batch_length and batch_size dimensions.
+        # [1:] to aggregate over vector dimensions, i.e., strip off the
+        # batch dimension.
         if self._agg == "mean":
-            loss = distance.mean(list(range(len(distance.shape)))[2:])
+            loss = distance.mean(list(range(len(distance.shape)))[1:])
         elif self._agg == "sum":
-            loss = distance.sum(list(range(len(distance.shape)))[2:])
+            loss = distance.sum(list(range(len(distance.shape)))[1:])
         else:
             raise NotImplementedError(self._agg)
 
@@ -353,9 +366,9 @@ class TwoHotDist:
             return symlog(weighted_avg)
         return weighted_avg
 
-    def log_prob(self, target: torch.Tensor) -> torch.Tensor:
+    def loss(self, target: torch.Tensor) -> torch.Tensor:
         """
-        Computes the log probability of the target given the networks
+        Computes the negative log probability of the target given the networks
         probabilities.
 
         Target is the true values, i.e., not passed through symexp
@@ -406,4 +419,80 @@ class TwoHotDist:
 
         # Get log probs in stable way
         log_pred = self._logits - torch.logsumexp(self._logits, -1, keepdim=True)
-        return (one_hot_target * log_pred).sum(-1)
+        return -(one_hot_target * log_pred).sum(-1)
+
+
+class BoundedNormalDist:
+    """
+    Normal distribution whose standard deviation is bounded between some
+    given values
+    """
+
+    def __init__(
+        self,
+        mean: torch.Tensor,
+        stddev: torch.Tensor,
+        min_std: float,
+        max_std: float,
+        std_bias: float = 2.0,
+    ) -> None:
+        """
+        Args:
+            mean (torch.Tensor): mean of the distribution of shape (batch_size, D) where
+            D is the dimensionality of the normal distribution. This makes batch_size
+            independent Normals, each with dimension D.
+
+            stddev (torch.Tensor): unscaled stddev of the distributino of shape (batch_size, D)
+
+            min_std (float): minimum stddev of the bounded normal.
+
+            max_std (float): maximum stddev of the bounded normal.
+
+            std_bias (float): bias to add to the stddev before it is passed through the sigmoid function.
+            Defaults to 2.0.
+
+        """
+
+        assert max_std >= min_std, (
+            f"Max_std {max_std} can't be lower than min_std {min_std}"
+        )
+        # Sigmoid outputs in tange (0, 1), essentially choosing where in the range
+        # (min_std, max_std) the scaled_std should fall. Bias is assed to encourage
+        # high_std, especially early on in learning where the modelled std may be
+        # higher.
+        scaled_std = (max_std - min_std) * F.sigmoid(stddev + std_bias) + min_std
+        scaled_mean = F.tanh(mean)
+
+        self._dist = torchd.Normal(scaled_mean, scaled_std)
+
+    def sample(self) -> torch.Tensor:
+        """Sample from the distribution using rsample for reparameterisation
+        to allow grads to flow.
+
+        """
+        return self._dist.rsample()
+
+    def mean(self) -> torch.Tensor:
+        """
+        Returns the mean of the distribution.
+        """
+        return self._dist.mean
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        """
+        Returns the log probability of observing the values given
+        the distribution parameters.
+
+        Args:
+            value (torch.Tensor) of shape (B, D)
+        """
+
+        return self._dist.log_prob(value)
+
+    def entropy(self) -> torch.Tensor:
+        """
+        Returns the entropy of the distribution of the same shape
+        as the mean. I.e., the entropy across each independent gaussian
+        dimension, and each batch.
+        """
+        return self._dist.entropy()
