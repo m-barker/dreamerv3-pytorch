@@ -496,3 +496,41 @@ class BoundedNormalDist:
         dimension, and each batch.
         """
         return self._dist.entropy()
+
+
+class BernoulliDist:
+    """Binary Bernoulli distribution for continue predictor"""
+
+    def __init__(self, logits: torch.Tensor):
+        """
+        Args:
+            logits (torch.Tensor): of shape (B, 1)
+        """
+        self._logits = logits
+        self._dist = torchd.bernoulli.Bernoulli(logits=logits)
+
+    def pred(self) -> torch.Tensor:
+        # Sigmoid of 0 is 0.5
+        return (self._logits > 0).to(torch.float32).sum(dim=-1)
+
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+           value (torch.Tensor) of shape (B,). Should be either
+           zero or one.
+        """
+
+        return self._dist.log_prob(value.unsqueeze(-1)).squeeze()
+
+    def sample(self) -> torch.Tensor:
+        """
+        Returns a sample of shape (B, )
+        """
+        # Bernoulli has no rsample so do straight through grads
+        s = self._dist.sample()
+        probs = F.sigmoid(self._logits)
+        s += probs - probs.detach()
+        return s.squeeze()
+
+    def mode(self) -> torch.Tensor:
+        return self.pred()

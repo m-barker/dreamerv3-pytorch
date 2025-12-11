@@ -7,6 +7,7 @@ from dreamer.distributions.distributions import (
     SymlogDist,
     TwoHotDist,
     BoundedNormalDist,
+    BernoulliDist,
 )
 
 
@@ -180,3 +181,18 @@ def test_bounded_normal_bounds():
 
     assert torch.all(stdev >= 0.0)
     assert torch.all(stdev <= 1.0)
+
+
+def test_bernoulli_shape():
+    logits = torch.randn((10, 1))
+    dist = BernoulliDist(logits)
+
+    pred = dist.pred()
+    assert pred.shape == (10,)
+
+    sample = dist.sample()
+    assert sample.shape == (10,)
+
+    vals = torch.ones((10,))
+    log_prob = dist.log_prob(vals)
+    assert log_prob.shape == (10,)
