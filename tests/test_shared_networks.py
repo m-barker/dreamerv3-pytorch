@@ -1,7 +1,7 @@
 import sys
 
 import torch
-from dreamer.networks.shared import RMSNormWrapper, truncated_normal_weight_init
+from dreamer.networks.shared import RMSNormWrapper, MLP, truncated_normal_weight_init
 from dreamer.networks.encoder import CNNEncoder
 
 
@@ -65,3 +65,26 @@ def test_encoder_weight_init():
             max_val = param.abs().max().item()
             # 2.3 as we scale [-2, 2] by 1.1368 * sqrt(1/something)
             assert max_val <= 2.3, f"{name} exceeds truncation range: {max_val}"
+
+
+def test_mlp_shapes():
+    network = MLP(16, 64, 3, 8, "ReLU", True, True)
+    input = torch.randn((2, 16))
+    output = network(input)
+    assert output.shape == ((2, 64))
+
+
+def test_mlp_winit():
+    network = MLP(16, 64, 3, 8, "ReLU", True, True, winit_scale=0.0)
+
+    input = torch.randn((2, 16))
+    output = network(input)
+
+    assert torch.all(output == 0)
+
+    network = MLP(16, 64, 3, 8, "ReLU", True, True, winit_scale=1.0)
+
+    input = torch.randn((2, 16))
+    output = network(input)
+
+    assert not torch.all(output == 0)
