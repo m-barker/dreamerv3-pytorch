@@ -478,6 +478,13 @@ class BoundedNormalDist:
         """
         return self._dist.mean
 
+    @property
+    def mode(self) -> torch.Tensor:
+        """
+        Returns the mode of the distribution
+        """
+        return self._dist.mode
+
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         """
         Returns the log probability of observing the values given

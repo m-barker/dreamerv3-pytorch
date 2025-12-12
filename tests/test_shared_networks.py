@@ -1,7 +1,14 @@
 import sys
 
 import torch
-from dreamer.networks.shared import RMSNormWrapper, MLP, truncated_normal_weight_init
+from dreamer.networks.shared import (
+    RMSNormWrapper,
+    MLP,
+    truncated_normal_weight_init,
+    OneHotDist,
+    OneHotParams,
+    MLPDistHead,
+)
 from dreamer.networks.encoder import CNNEncoder
 
 
@@ -88,3 +95,16 @@ def test_mlp_winit():
     output = network(input)
 
     assert not torch.all(output == 0)
+
+
+def test_mlp_dist_head():
+    one_hot_params = OneHotParams(0.0)
+    logits = torch.randn((10, 20))
+
+    head = MLPDistHead(one_hot_params)
+
+    dist = head.forward(logits)
+
+    assert isinstance(dist, OneHotDist)
+    sample = dist.sample()
+    assert sample.shape == ((10, 20))

@@ -1,8 +1,58 @@
 from typing import Optional, Tuple, Union, List
+from dataclasses import dataclass, asdict
 
 import torch
 import torch.nn as nn
 import numpy as np
+
+from ..distributions.distributions import (
+    OneHotDist,
+    TwoHotDist,
+    SymlogDist,
+    BoundedNormalDist,
+    BernoulliDist,
+)
+
+
+@dataclass
+class OneHotParams:
+    # % of distribution that should be
+    # mixed with a uniform
+    unimix_ratio: float
+
+
+@dataclass
+class SymlogDistParams:
+    # Distance metric to use
+    dist: str = "mse"
+    # Aggregation metric over batch
+    # dimensions
+    agg: str = "sum"
+    tol: float = 1e-8
+
+
+@dataclass
+class TwoHotDistParams:
+    n_bins: int = 255
+    min_bin_val: float = -20.0
+    max_bin_val: float = 20.0
+    symexp_bins: bool = True
+
+
+@dataclass
+class BoundedNormalParams:
+    # Std bounds
+    min_std: float
+    max_std: float
+    # Amount to increase std by before it
+    # goes through sigmoid
+    std_bias: float = 2.0
+
+
+@dataclass
+class BernouliDistParams:
+    # No parameters needed.
+    pass
 
 
 def truncated_normal_weight_init(layer: nn.Module, weight_scale: float = 1.0) -> None:
@@ -201,3 +251,49 @@ class MLP(nn.Module):
         """
 
         return self._network(input)
+
+
+class MLPDistHead(nn.Module):
+    """
+    Distribution Head for an MLP Network, used to convert
+    MLP outputs to a parameterised distribution.
+    """
+
+    def __init__(
+        self,
+        dist_params: Union[
+            OneHotParams,
+            SymlogDistParams,
+            TwoHotDistParams,
+            BoundedNormalParams,
+            BernouliDistParams,
+        ],
+    ) -> None:
+        super().__init__()
+        self._dist_params = dist_params
+        self._kw_params = asdict(dist_params)
+
+    def forward(
+        self, input: torch.Tensor
+    ) -> Union[OneHotDist, TwoHotDist, SymlogDist, BoundedNormalDist, BernoulliDist]:
+        if isinstance(self._dist_params, OneHotParams):
+            dist = OneHotDist(logits=input, **self._kw_params)
+        elif isinstance(self._dist_params, SymlogDistParams):
+            dist = SymlogDist(mode=input, **self._kw_params)
+        elif isinstance(self._dist_params, TwoHotDistParams):
+            dist = TwoHotDist(logits=input, **self._kw_params)
+        elif isinstance(self._dist_params, BoundedNormalParams):
+            assert input.shape[-1] % 2 == 0, (
+                f"Need an even MLP output to parameterise mean and stdev, got a shape {input.shape}"
+            )
+            # Split it two over last dimension
+            mean, stddev = input.chunk(2, dim=-1)
+            dist = BoundedNormalDist(mean=mean, stddev=stddev, **self._kw_params)
+        elif isinstance(self._dist_params, BernouliDistParams):
+            dist = BernoulliDist(logits=input)
+        else:
+            raise ValueError(
+                f"Provided distribution parameters {self._dist_params} don't match any handled distributions"
+            )
+
+        return dist
