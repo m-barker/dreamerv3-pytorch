@@ -309,8 +309,8 @@ class TwoHotDist:
                 lower_bins = symexp(lower_bins)
 
             upper_bins = -torch.flip(lower_bins, [-1])
-            # We have flipped, so last bin is now 0, we already have a 0 so drop it
-            return torch.concatenate([lower_bins, upper_bins[:-1]], dim=-1)
+            # We have flipped, so first bin is now 0, we already have a 0 so drop it
+            return torch.concatenate([lower_bins, upper_bins[1:]], dim=-1)
         else:
             lower_bins = torch.linspace(
                 self._min_bin_val, 0, self._n_bins // 2, dtype=torch.float32

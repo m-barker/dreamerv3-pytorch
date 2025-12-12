@@ -153,6 +153,16 @@ def test_twohot_shapes():
     assert res.shape == (16,)
 
 
+def test_twohot_bins():
+    logits = torch.randn(1, 7)
+    dist = TwoHotDist(logits, symexp_bins=False, n_bins=7)
+    bins = dist._bins
+    midpoint = 7 // 2
+    # Should be symetric around 0.0
+    assert bins[midpoint] == 0.0
+    assert bins[0] == -bins[-1]
+
+
 def test_bounded_normal_shapes():
     mean = torch.randn((16, 4))
     std = torch.randn((16, 4))
