@@ -8,6 +8,7 @@ from dreamer.networks.shared import (
     OneHotDist,
     OneHotParams,
     MLPDistHead,
+    BlockLinearLayer,
 )
 from dreamer.networks.encoder import CNNEncoder
 
@@ -108,3 +109,23 @@ def test_mlp_dist_head():
     assert isinstance(dist, OneHotDist)
     sample = dist.sample()
     assert sample.shape == ((10, 20))
+
+
+def test_block_linear_winit():
+    layer = BlockLinearLayer(128, 256, 2, True, True, act_func="ReLU")
+    assert torch.all(layer._bias == 0)
+    assert layer._weights.nelement() != 0
+
+    layer = BlockLinearLayer(128, 256, 2, True, True, winit_scale=0.0, act_func="ReLU")
+    assert torch.all(layer._weights == 0.0)
+
+
+def test_block_linear_shapes():
+    layer = BlockLinearLayer(128, 256, 2, True, True, act_func="ReLU")
+    input = torch.randn((64, 128))
+    output = layer(input)
+    assert output.shape == (64, 256)
+
+    input = torch.randn((16, 64, 128))
+    output = layer(input)
+    assert output.shape == (16, 64, 256)

@@ -1,6 +1,8 @@
 from typing import Optional, Tuple, Union, List
 from dataclasses import dataclass, asdict
 
+import math
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -297,3 +299,97 @@ class MLPDistHead(nn.Module):
             )
 
         return dist
+
+
+class BlockLinearLayer(nn.Module):
+    """Implementation of a Block Linear Layer
+    Efficiently applies B independent linear layers to B blocks
+    on the input.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        n_blocks: int,
+        bias: bool,
+        layer_norm: bool,
+        winit_scale=1.0,
+        act_func: Optional[str] = None,
+    ) -> None:
+        """
+        Args:
+            input_dim (int): dimensionality of input data
+
+            output_dim (int): dimensionality of output
+
+            n_blocks (int): number of blocks to process. It must be the case
+            that input_dim % n_blocks == output_dim % n_blocks == 0.
+
+            bias (bool): whether to apply a global bias across all blocks.
+
+            layer_norm (bool): whether to apply layer normalisation after the
+            linear layer
+
+            winit_scale (float): amount to scale the truncated normal weights init
+            by
+
+            act_func (str, optinal): optional activation function to apply after
+            the block linear layer. Defaults to None
+        """
+        super().__init__()
+        assert input_dim % n_blocks == 0, (
+            f"Input dimension {input_dim} isn't perfectly divided by the number of blocks {n_blocks}"
+        )
+        assert output_dim % n_blocks == 0, (
+            f"Output dimension {output_dim} isn't perfectly divided by the number of blocks {n_blocks}"
+        )
+
+        self._input_dim = input_dim
+        self._output_dim = output_dim
+        self._n_blocks = n_blocks
+        self._layer_norm = layer_norm
+        self._act_func = act_func
+
+        self._block_in_dim = input_dim // n_blocks
+        self._block_out_dim = output_dim // n_blocks
+
+        self._weights = nn.Parameter(
+            torch.empty(self._n_blocks, self._block_in_dim, self._block_out_dim)
+        )
+        # We can't use our other function as it uses .apply() and assumes the input
+        # is a nn.Module, so wouldn't initialise the parameters and bias we have here.
+        # Since this is the only class where we write a custom, non nn.Module network,
+        # we hard code this initilisation.
+        nn.init.trunc_normal_(self._weights, mean=0.0, std=1.0, a=-2.0, b=2.0)
+        with torch.no_grad():
+            self._weights.mul_(1.1368 * math.sqrt(1 / self._block_in_dim) * winit_scale)
+
+        if bias:
+            self._bias = nn.Parameter(torch.zeros(self._output_dim))
+        else:
+            self._bias = None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x (torch.Tensor): shape (..., self._input_dim) where ... can
+            be any number of batch dimensions
+        Returns:
+            torch.Tensor of shape (..., self._output_dim)
+        """
+
+        *batch, _ = x.shape
+
+        x = x.view(*batch, self._n_blocks, self._block_in_dim)
+
+        # (batch, n_blocks, block_in_dim) @ (n_blocks, block_in_dim, block_out_dim)
+        # -> (batch, n_blocks, block_out_dim)
+        x = torch.einsum("...bi,bio->...bo", x, self._weights)
+
+        x = x.reshape(*batch, self._output_dim)
+
+        if self._bias is not None:
+            x = x + self._bias
+
+        return x
