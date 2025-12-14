@@ -1,3 +1,5 @@
+from typing import Dict, Optional, Tuple, Union
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -353,3 +355,188 @@ class RSSM:
         )
         post_dist = OneHotDist(logits=post_logits, unimix_ratio=self._unimix)
         return post_dist
+
+    def _get_initial_state(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns tensors of zeros for the initial deterministic and stochastic
+        state
+        """
+        init_deter = torch.zeros((batch_size, self._deter_size))
+        init_stoch = torch.zeros((batch_size, self._n_stoch_dists, self._n_stoch_cats))
+
+        return init_deter, init_stoch
+
+    def _handle_is_first(
+        self, data: torch.Tensor, is_first: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Zeros any data where is_first == 1
+
+        Args:
+            data (torch.Tensor) of shape (B, D) or (B, D, D)
+
+            is_first (torch.Tensor) of shape (B, 1)
+        """
+        # For stochastic latent, add extra dim to is_first
+        # to make broadcasting possible
+        if len(data.shape) == 3:
+            is_first = is_first.unsqueeze(-1)
+        return data * (~is_first)
+
+    def observe_sequence(
+        self,
+        prev_actions: torch.Tensor,
+        encoded_obs: torch.Tensor,
+        is_first_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            prev_actions (torch.Tensor): actions taken at the previous timestep of
+            shape (B, T, self._action_size)
+
+            encoded_obs (torch.Tensor): encoder output for observations at each timestep
+            of shape (B, T, self._encoded_size)
+
+            is_first_mask (torch.Tensor): Mask of 1s whenever the current timestep is the
+            first timestep in the sequence. Shape (B, T, 1)
+        """
+        from torch_xla.experimental.scan import scan
+
+        B, T, _ = prev_actions.shape
+
+        prev_deter, prev_post = None, None
+
+        # Define the step function
+        def step(carry, inputs):
+            prev_deter, prev_post = carry
+            prev_action_t, encoded_obs_t, is_first_t = inputs
+
+            out = self.obs_step(
+                prev_action=prev_action_t,
+                encoded_obs=encoded_obs_t,
+                is_first=is_first_t,
+                prev_deter=prev_deter,
+                prev_post=prev_post,
+            )
+
+            # carry for next timestep
+            new_carry = (out["deter"], out["post_sample"])
+            # outputs to accumulate across timesteps
+            outputs = {
+                "deter": out["deter"],
+                "prior_logits": out["prior_logits"],
+                "post_logits": out["post_logits"],
+                "prior_sample": out["prior_sample"],
+                "post_sample": out["post_sample"],
+            }
+            return new_carry, outputs
+
+        # Scan expects inputs to have time dimension first: (T, B, ...)
+        scan_inputs = (
+            prev_actions.transpose(0, 1),  # (T, B, action_size)
+            encoded_obs.transpose(0, 1),  # (T, B, encoded_size)
+            is_first_mask.transpose(0, 1),  # (T, B, 1)
+        )
+
+        carry, seq_outputs = scan(step, (prev_deter, prev_post), scan_inputs)
+
+        # Transpose outputs back to (B, T, ...)
+        seq_outputs = {k: v.transpose(0, 1) for k, v in seq_outputs.items()}
+
+        return seq_outputs
+
+    def observe_sequence_no_scan(
+        self,
+        prev_actions: torch.Tensor,
+        encoded_obs: torch.Tensor,
+        is_first_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        B, T, _ = prev_actions.shape
+
+        # Initialize previous hidden states
+        prev_deter, prev_post = None, None
+
+        # Prepare storage for outputs
+        seq_outputs = {
+            "deter": [],
+            "prior_logits": [],
+            "post_logits": [],
+            "prior_sample": [],
+            "post_sample": [],
+        }
+
+        # Iterate over time dimension
+        for t in range(T):
+            prev_action_t = prev_actions[:, t]
+            encoded_obs_t = encoded_obs[:, t]
+            is_first_t = is_first_mask[:, t]
+
+            out = self.obs_step(
+                prev_action=prev_action_t,
+                encoded_obs=encoded_obs_t,
+                is_first=is_first_t,
+                prev_deter=prev_deter,
+                prev_post=prev_post,
+            )
+
+            # Update carry for next timestep
+            prev_deter, prev_post = out["deter"], out["post_sample"]
+
+            # Append outputs
+            for k in seq_outputs.keys():
+                seq_outputs[k].append(out[k])
+
+        # Stack outputs along time dimension
+        seq_outputs = {k: torch.stack(v, dim=1) for k, v in seq_outputs.items()}
+
+        return seq_outputs
+
+    def obs_step(
+        self,
+        prev_action: torch.Tensor,
+        encoded_obs: torch.Tensor,
+        is_first: torch.Tensor,
+        prev_deter: Optional[torch.Tensor] = None,
+        prev_post: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Args:
+            prev_action (torch.Tensor): previous action of shape (B, self._action_size)
+
+            encoded_obs (torch.Tensor): current encoded obs of shape (B, self._encoded_size)
+
+            is_first (torch.Tensor): mask for if current state is the first in a trajectory.
+            of shape (B, 1)
+        """
+        assert (prev_deter is None) == (prev_post is None), (
+            "prev_deter and prev_post must either both be None or both not None"
+        )
+        # Don't need the or, but needed to make Pyright behave.
+        if prev_deter is None or prev_post is None:
+            prev_deter, prev_post = self._get_initial_state(prev_action.shape[0])
+
+        # Make zeros wherever is_first is == 1 denoting start of trajectory
+        prev_deter = self._handle_is_first(prev_deter, is_first)
+        prev_post = self._handle_is_first(prev_post, is_first)
+
+        # (B, n_dist, n_cats) -> (B, n_dist * n_cats)
+        prev_post = prev_post.reshape(prev_post.shape[0], self._stoch_dim)
+
+        deter = self._get_deterministic_latent(prev_deter, prev_post, prev_action)
+        prior_dist = self._get_prior_dist(deter)
+        post_dist = self._get_post_dist(deter, encoded_obs)
+
+        # Samples are of shape (B, n_dist, n_cats)
+        prior_sample = prior_dist.sample()
+        post_sample = post_dist.sample()
+
+        prior_logits = prior_dist.logits
+        post_logits = post_dist.logits
+
+        return {
+            "deter": deter,
+            "prior_logits": prior_logits,
+            "post_logits": post_logits,
+            "prior_sample": prior_sample,
+            "post_sample": post_sample,
+        }
