@@ -192,7 +192,7 @@ def test_observe():
     assert out["post_sample"].shape == ((16, 32, 16, 8))
 
 
-def test_observe_no_scan():
+def test_img_step():
     rssm = RSSM(
         deter_size=128,
         n_stoch_dists=16,
@@ -211,11 +211,13 @@ def test_observe_no_scan():
         action_dim=10,
     )
 
-    prev_actions = torch.randn((16, 32, 10))
-    obs = torch.randn((16, 32, 64))
-    is_first_mask = torch.zeros((16, 32, 1)).to(torch.int16)
+    action = torch.randn((8, 10))
+    is_first = torch.zeros((8, 1)).to(torch.int16)
 
-    out = rssm.observe_sequence_no_scan(prev_actions, obs, is_first_mask)
-    assert out["deter"].shape == ((16, 32, 128))
-    assert out["prior_sample"].shape == ((16, 32, 16, 8))
-    assert out["post_sample"].shape == ((16, 32, 16, 8))
+    result = rssm.img_step(action, is_first)
+
+    assert isinstance(result["deter"], torch.Tensor)
+    assert isinstance(result["prior_sample"], torch.Tensor)
+
+    assert result["deter"].shape == (8, 128)
+    assert result["prior_sample"].shape == (8, 16, 8)

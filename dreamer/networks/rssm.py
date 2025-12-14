@@ -182,6 +182,7 @@ class RSSM:
         winit_scale: float,
         n_blocks: int,
         action_dim: int,
+        device: Optional[torch.device] = None,
     ) -> None:
         """
         Args:
@@ -220,6 +221,9 @@ class RSSM:
             n_blocks (int): the number of blocks in the block linear GRU component.
 
             action_dim (int): number of dimensions across (flattened) actions.
+
+            device (torch.device, optional): device to put tensors on. If None,
+            defaults to CPU. Defaults to None.
         """
         self._deter_size = deter_size
         self._n_stoch_dists = n_stoch_dists
@@ -241,6 +245,9 @@ class RSSM:
         self._latent_dim = self._deter_size + self._stoch_dim
 
         self._act_func = getattr(nn, self._act_func_name)
+        if device is None:
+            device = torch.device("cpu")
+        self._device = device
 
         self._block_gru = DeterministicModule(
             self._deter_size,
@@ -253,10 +260,10 @@ class RSSM:
             self._n_blocks,
             self._winit_scale,
             self._act_func_name,
-        )
+        ).to(device)
 
-        self._prior_logit_network = self._build_prior_network()
-        self._post_logit_network = self._build_post_network()
+        self._prior_logit_network = self._build_prior_network().to(device)
+        self._post_logit_network = self._build_post_network().to(device)
 
     def _build_prior_network(self) -> nn.Sequential:
         """
@@ -361,8 +368,10 @@ class RSSM:
         Returns tensors of zeros for the initial deterministic and stochastic
         state
         """
-        init_deter = torch.zeros((batch_size, self._deter_size))
-        init_stoch = torch.zeros((batch_size, self._n_stoch_dists, self._n_stoch_cats))
+        init_deter = torch.zeros((batch_size, self._deter_size)).to(self._device)
+        init_stoch = torch.zeros(
+            (batch_size, self._n_stoch_dists, self._n_stoch_cats)
+        ).to(self._device)
 
         return init_deter, init_stoch
 
@@ -400,57 +409,6 @@ class RSSM:
             is_first_mask (torch.Tensor): Mask of 1s whenever the current timestep is the
             first timestep in the sequence. Shape (B, T, 1)
         """
-        from torch_xla.experimental.scan import scan
-
-        B, T, _ = prev_actions.shape
-
-        prev_deter, prev_post = None, None
-
-        # Define the step function
-        def step(carry, inputs):
-            prev_deter, prev_post = carry
-            prev_action_t, encoded_obs_t, is_first_t = inputs
-
-            out = self.obs_step(
-                prev_action=prev_action_t,
-                encoded_obs=encoded_obs_t,
-                is_first=is_first_t,
-                prev_deter=prev_deter,
-                prev_post=prev_post,
-            )
-
-            # carry for next timestep
-            new_carry = (out["deter"], out["post_sample"])
-            # outputs to accumulate across timesteps
-            outputs = {
-                "deter": out["deter"],
-                "prior_logits": out["prior_logits"],
-                "post_logits": out["post_logits"],
-                "prior_sample": out["prior_sample"],
-                "post_sample": out["post_sample"],
-            }
-            return new_carry, outputs
-
-        # Scan expects inputs to have time dimension first: (T, B, ...)
-        scan_inputs = (
-            prev_actions.transpose(0, 1),  # (T, B, action_size)
-            encoded_obs.transpose(0, 1),  # (T, B, encoded_size)
-            is_first_mask.transpose(0, 1),  # (T, B, 1)
-        )
-
-        carry, seq_outputs = scan(step, (prev_deter, prev_post), scan_inputs)
-
-        # Transpose outputs back to (B, T, ...)
-        seq_outputs = {k: v.transpose(0, 1) for k, v in seq_outputs.items()}
-
-        return seq_outputs
-
-    def observe_sequence_no_scan(
-        self,
-        prev_actions: torch.Tensor,
-        encoded_obs: torch.Tensor,
-        is_first_mask: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
         B, T, _ = prev_actions.shape
 
         # Initialize previous hidden states
@@ -539,4 +497,50 @@ class RSSM:
             "post_logits": post_logits,
             "prior_sample": prior_sample,
             "post_sample": post_sample,
+        }
+
+    def img_step(
+        self,
+        prev_action: torch.Tensor,
+        is_first: torch.Tensor,
+        prev_deter: Optional[torch.Tensor] = None,
+        prev_stoch: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Single "imagination" step, which computes the deterministic state and the
+        prior stochastic state.
+
+        Args:
+            prev_action (torch.Tensor): previous actions of shape (B, self._action_size)
+
+            is_first (torch.Tensor): mask for if current state is the first in a trajectory.
+            of shape (B, 1)
+        """
+
+        assert (prev_deter is None) == (prev_stoch is None), (
+            "prev_deter and prev_post must either both be None or both not None"
+        )
+        # Don't need the or, but needed to make Pyright behave.
+        if prev_deter is None or prev_stoch is None:
+            prev_deter, prev_stoch = self._get_initial_state(prev_action.shape[0])
+
+        # Make zeros wherever is_first is == 1 denoting start of trajectory
+        prev_deter = self._handle_is_first(prev_deter, is_first)
+        prev_stoch = self._handle_is_first(prev_stoch, is_first)
+
+        # (B, n_dist, n_cats) -> (B, n_dist * n_cats)
+        prev_stoch = prev_stoch.reshape(prev_stoch.shape[0], self._stoch_dim)
+
+        deter = self._get_deterministic_latent(prev_deter, prev_stoch, prev_action)
+        prior_dist = self._get_prior_dist(deter)
+
+        # Samples are of shape (B, n_dist, n_cats)
+        prior_sample = prior_dist.sample()
+
+        prior_logits = prior_dist.logits
+
+        return {
+            "deter": deter,
+            "prior_logits": prior_logits,
+            "prior_sample": prior_sample,
         }
