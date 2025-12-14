@@ -3,16 +3,14 @@ name = "dreamerv3-pytorch"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = "==3.10.18"
+requires-python = "==3.11.13"
 dependencies = [
     "flake8>=7.3.0",
     "pytest>=9.0.2",
     "python-lsp-server>=1.13.0",
     "ruff>=0.12.8",
-    "torch==2.5.0",
-    "torch-xla",
+    "setuptools>=80.9.0",
+    "torch",
     "torchvision",
+    "triton>=3.1.0",
 ]
-
-[tool.uv.sources]
-torch-xla = { url = "https://storage.googleapis.com/pytorch-xla-releases/wheels/cuda/12.1/torch_xla-2.5.0-cp310-cp310-manylinux_2_28_x86_64.whl" }
