@@ -118,7 +118,7 @@ class RMSNormWrapper(nn.Module):
     ) -> None:
         """
         Args:
-            norm_dims (Union[Tuple[int, int]]): the size to normalise
+            norm_dims (Union[List[int], int]): the size to normalise
             over. Normalises over the last dimensions.
 
             eps (float, optional) epsilon float added to the
@@ -349,7 +349,7 @@ class BlockLinearLayer(nn.Module):
         self._output_dim = output_dim
         self._n_blocks = n_blocks
         self._layer_norm = layer_norm
-        self._act_func = act_func
+        self._act_func_name = act_func
 
         self._block_in_dim = input_dim // n_blocks
         self._block_out_dim = output_dim // n_blocks
@@ -369,6 +369,17 @@ class BlockLinearLayer(nn.Module):
             self._bias = nn.Parameter(torch.zeros(self._output_dim))
         else:
             self._bias = None
+
+        if self._layer_norm:
+            self._norm = RMSNormWrapper(self._output_dim)
+            truncated_normal_weight_init(self._norm)
+        else:
+            self._norm = None
+
+        if self._act_func_name:
+            self._act_func = getattr(nn, self._act_func_name)()
+        else:
+            self._act_func = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -391,5 +402,10 @@ class BlockLinearLayer(nn.Module):
 
         if self._bias is not None:
             x = x + self._bias
+
+        if self._norm is not None:
+            x = self._norm(x)
+        if self._act_func is not None:
+            x = self._act_func(x)
 
         return x
