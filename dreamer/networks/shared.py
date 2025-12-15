@@ -17,6 +17,18 @@ from ..distributions.distributions import (
 
 
 @dataclass
+class MLPParams:
+    input_dim: int
+    out_dim: int
+    n_layers: int
+    layer_width: int
+    act_func: str
+    layer_norm: bool
+    bias: bool
+    winit_scale: float = 1.0
+
+
+@dataclass
 class OneHotParams:
     # % of distribution that should be
     # mixed with a uniform

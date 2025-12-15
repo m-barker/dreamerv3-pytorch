@@ -1,11 +1,70 @@
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
+
+from dataclasses import dataclass, asdict
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .shared import RMSNormWrapper
+from .shared import MLP, RMSNormWrapper, MLPParams
+
+
+@dataclass
+class CNNParams:
+    initial_depth: int
+    kernel_size: int
+    stride: int
+    min_res: int
+    bias: bool
+    norm: str
+    act_func: str
+    max_pool: bool
+    depth_mult: Tuple[int, ...]
+    max_pool_stride: Optional[int] = None
+    max_pool_kernel: Optional[int] = None
+    dilation: int = 1
+    image_shape: Tuple[int, int, int] = (64, 64, 3)
+
+
+class Encoder(nn.Module):
+    """
+    Encoder class to embed vector observations and image observations
+    to a single embedding vector.
+    """
+
+    def __init__(
+        self,
+        image_keys: List[str],
+        vector_keys: List[str],
+        image_shapes: List[Tuple[int, int, int]],
+        vector_shapes: List[int],
+        cnn_params: CNNParams,
+        mlp_params: MLPParams,
+    ) -> None:
+        super().__init__()
+
+        # Assert that there is only one h,w element in the set of all h,w.
+        # I.e., a constant h,w for all image shapes
+        assert len({(h, w) for h, w, _ in image_shapes}) == 1, image_shapes
+
+        total_channels = sum(i[-1] for i in image_shapes)
+        vector_dim = sum(i for i in vector_shapes)
+
+        self._cnn_params = cnn_params
+        self._cnn_params.image_shape = (
+            image_shapes[0][0],
+            image_shapes[0][1],
+            total_channels,
+        )
+        self._mlp_params = mlp_params
+        self._mlp_params.input_dim = vector_dim
+
+        self._image_keys = image_keys
+        self._vector_keys = vector_keys
+
+        self._cnn_encoder = CNNEncoder(**asdict(self._cnn_params))
+        self._mlp_encoder = MLP(**asdict(self._mlp_params))
 
 
 class PadModule(nn.Module):
