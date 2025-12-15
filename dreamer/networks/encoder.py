@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from dataclasses import dataclass, asdict
 
@@ -7,7 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .shared import MLP, RMSNormWrapper, MLPParams
+from .shared import MLP, RMSNormWrapper, MLPParams, truncated_normal_weight_init
+from dreamer.distributions.dist_utils import symlog
 
 
 @dataclass
@@ -17,7 +18,7 @@ class CNNParams:
     stride: int
     min_res: int
     bias: bool
-    norm: str
+    norm: bool
     act_func: str
     max_pool: bool
     depth_mult: Tuple[int, ...]
@@ -36,35 +37,104 @@ class Encoder(nn.Module):
     def __init__(
         self,
         image_keys: List[str],
-        vector_keys: List[str],
         image_shapes: List[Tuple[int, int, int]],
-        vector_shapes: List[int],
         cnn_params: CNNParams,
-        mlp_params: MLPParams,
+        vector_keys: Optional[List[str]] = None,
+        vector_shapes: Optional[List[int]] = None,
+        mlp_params: Optional[MLPParams] = None,
+        symlog_vecs: bool = True,
     ) -> None:
         super().__init__()
 
+        self._image_keys, self._image_shapes = zip(
+            *sorted(zip(image_keys, image_shapes))
+        )
         # Assert that there is only one h,w element in the set of all h,w.
         # I.e., a constant h,w for all image shapes
-        assert len({(h, w) for h, w, _ in image_shapes}) == 1, image_shapes
+        assert len({(h, w) for h, w, _ in self._image_shapes}) == 1, self._image_shapes
 
-        total_channels = sum(i[-1] for i in image_shapes)
-        vector_dim = sum(i for i in vector_shapes)
+        total_channels = sum(i[-1] for i in self._image_shapes)
 
         self._cnn_params = cnn_params
         self._cnn_params.image_shape = (
-            image_shapes[0][0],
-            image_shapes[0][1],
+            self._image_shapes[0][0],
+            self._image_shapes[0][1],
             total_channels,
         )
-        self._mlp_params = mlp_params
-        self._mlp_params.input_dim = vector_dim
-
-        self._image_keys = image_keys
-        self._vector_keys = vector_keys
-
+        self._total_channels = total_channels
+        self._image_keys = list(self._image_keys)
         self._cnn_encoder = CNNEncoder(**asdict(self._cnn_params))
-        self._mlp_encoder = MLP(**asdict(self._mlp_params))
+
+        self._vector_keys = vector_keys
+        self._symlog_vecs = symlog_vecs
+        if vector_keys is not None:
+            assert vector_shapes is not None
+            assert mlp_params is not None
+            self._vector_keys, self._vector_shapes = zip(
+                *sorted(zip(vector_keys, vector_shapes))
+            )
+            vector_dim = sum(i for i in self._vector_shapes)
+            self._mlp_params = mlp_params
+            self._mlp_params.input_dim = vector_dim
+            self._vector_keys = list(self._vector_keys)
+            self._mlp_encoder = MLP(**asdict(self._mlp_params))
+
+        self._encoded_dim = self._cnn_encoder.encoded_dim
+        if vector_keys is not None:
+            self._encoded_dim += self._mlp_params.out_dim
+
+    def forward(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Encodes the data into a single vector.
+
+        Args:
+            data (Dict[str, torch.Tensor]): k:v correpsonds to
+            data name string and corresponding data tensor.
+            each data tensor is assumed to be either of shape
+            (B, T, ...) or (B, ...).
+
+        Returns:
+            torch.Tensor of shape (B, E) or (B, T, E)
+        """
+
+        image_data = [data[k] for k in self._image_keys]
+        vector_data = None
+        if self._vector_keys is not None:
+            vector_data = [data[k] for k in self._vector_keys]
+
+        if len(image_data[0].shape) == 5:
+            B, T, H, W, _ = image_data[0].shape
+        else:
+            T = None
+            B, H, W, _ = image_data[0].shape
+
+        # Concatenate over channel dimension
+        image_data = torch.concatenate(image_data, dim=-1)
+        if T is not None:
+            image_data = image_data.reshape((B * T, H, W, self._total_channels))
+        if vector_data is not None:
+            expected_shape = 3 if T is not None else 2
+            assert len(vector_data[0].shape) == expected_shape
+            vector_data = torch.concatenate(vector_data, dim=-1)
+            if T is not None:
+                vector_data = vector_data.reshape((B * T, -1))
+            if self._symlog_vecs:
+                vector_data = symlog(vector_data)
+
+        encoded_imgs = self._cnn_encoder(image_data)
+        encoded_vecs = None
+
+        if vector_data is not None:
+            encoded_vecs = self._mlp_encoder(vector_data)
+
+        if T is not None:
+            encoded_imgs = encoded_imgs.reshape((B, T, -1))
+            if encoded_vecs is not None:
+                encoded_vecs = encoded_vecs.reshape((B, T, -1))
+        embed = encoded_imgs
+        if encoded_vecs is not None:
+            embed = torch.concatenate([encoded_imgs, encoded_vecs], dim=-1)
+        return embed
 
 
 class PadModule(nn.Module):
@@ -108,7 +178,7 @@ class CNNEncoder(nn.Module):
         stride: int,
         min_res: int,
         bias: bool,
-        norm: str,
+        norm: bool,
         act_func: str,
         max_pool: bool,
         depth_mult: Tuple[int, ...],
@@ -131,8 +201,7 @@ class CNNEncoder(nn.Module):
 
             bias (bool): whether to use a bias in the network
 
-            norm (str): whether to use normalisation, and the type of normalisation.
-                        At the moment, only does rms norm.
+            norm (bool): whether to use rms normalisation.
 
             act_func (str): string name of activation function. Must match a PyTorch function
 
@@ -155,8 +224,6 @@ class CNNEncoder(nn.Module):
             assert stride == 1, "Stride must be equal to 1 if doing max pooling"
             assert max_pool_stride is not None
             assert max_pool_kernel is not None
-
-        assert norm in ("none", "rms"), f"Unhandled norm method {norm} probided"
 
         self._image_shape = image_shape
         self._initial_depth = initial_depth
@@ -181,6 +248,7 @@ class CNNEncoder(nn.Module):
         assert len(self._depth_mults) == self._n_conv_layers
 
         self._network = self._configure_network()
+        self._network.apply(truncated_normal_weight_init)
 
     def _configure_network(self) -> nn.Sequential:
         """
@@ -216,15 +284,14 @@ class CNNEncoder(nn.Module):
                     )
                 )
 
-            if self._norm != "none":
-                if self._norm == "rms":
-                    # (B, C, H, W) -> (B, H, W, C)
-                    layers.append(
-                        RMSNormWrapper(
-                            self._initial_depth * self._depth_mults[layer],
-                            permute=[0, 2, 3, 1],
-                        )
+            if self._norm:
+                # (B, C, H, W) -> (B, H, W, C)
+                layers.append(
+                    RMSNormWrapper(
+                        self._initial_depth * self._depth_mults[layer],
+                        permute=[0, 2, 3, 1],
                     )
+                )
             layers.append(activation_function())
 
             current_res = self._calculate_output_dim(current_res)
@@ -292,6 +359,13 @@ class CNNEncoder(nn.Module):
             input_res (int): resolution before applying convolution
         """
 
+        if self._use_max_pool:
+            assert self._max_pool_kernel is not None
+            assert self._max_pool_stride is not None
+            return math.floor(
+                (input_res - self._max_pool_kernel) / self._max_pool_stride + 1
+            )
+
         pad_left, pad_right, pad_top, pad_bot_ = self._calculate_same_padding(
             (input_res, input_res)
         )
@@ -332,7 +406,7 @@ class CNNEncoder(nn.Module):
             n_layers += 1
             current_res = new_res
 
-        self._encoded_res = current_res
+        self._encoded_res = max(current_res, self._min_res)
         self._encoded_dim = (
             self._encoded_res
             * self._encoded_res
@@ -369,20 +443,17 @@ class CNNEncoder(nn.Module):
     def forward(self, images: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            images (torch.Tensor) of shape (B, T, H, W, C)
+            images (torch.Tensor) of shape (B, H, W, C)
         """
         # Normalise to range [-0.5, 0.5]
         images = images / 255 - 0.5
 
-        B, T, H, W, C = images.shape
+        B, H, W, C = images.shape
 
-        # Reshape to (B*T, H, W, C)
-        images = images.reshape((B * T, H, W, C))
-        # (B*T, H, W, C) -> (B*T, C, H, W)
+        # (B, H, W, C) -> (B*T, C, H, W)
         images = images.permute(0, 3, 1, 2)
 
         output = self._network(images)
         # (B*T, C, H, W) -> (B*T, -1)
-        output = output.reshape(B * T, -1)
-        # (B * T,  -1) -> (B, T, -1)
-        return output.reshape(B, T, -1)
+        output = output.reshape(B, -1)
+        return output

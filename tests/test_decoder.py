@@ -15,6 +15,6 @@ def test_decoder_output():
         act_func="ReLU",
         final_sigmoid=True,
     )
-    latent_states = torch.randn((2, 4, 2048))
+    latent_states = torch.randn((2, 2048))
     decoded_images = decoder(latent_states)
-    assert decoded_images.shape == (2, 4, 64, 64, 3)
+    assert decoded_images.shape == (2, 64, 64, 3)

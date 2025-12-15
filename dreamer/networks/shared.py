@@ -247,8 +247,11 @@ class MLP(nn.Module):
             if self._layer_norm:
                 layers.append(RMSNormWrapper([self._layer_width]))
             layers.append(act_func())
-
-        layers.append(nn.Linear(self._layer_width, self._out_dim, bias=self._bias))
+        if self._n_layers == 1:
+            final_in = self._input_dim
+        else:
+            final_in = self._layer_width
+        layers.append(nn.Linear(final_in, self._out_dim, bias=self._bias))
         if self._layer_norm:
             layers.append(RMSNormWrapper([self._out_dim]))
         layers.append(act_func())

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .shared import RMSNormWrapper
+from .shared import RMSNormWrapper, truncated_normal_weight_init
 
 
 class RepeatLayer(nn.Module):
@@ -104,6 +104,8 @@ class CNNDecoder(nn.Module):
             self._starting_depth * self._starting_res * self._starting_res,
             bias=bias,
         )
+        self._cnn_network.apply(truncated_normal_weight_init)
+        self._linear_layer.apply(truncated_normal_weight_init)
 
     def _configure_cnn_network(self) -> nn.Sequential:
         layers = []
@@ -152,21 +154,18 @@ class CNNDecoder(nn.Module):
     def forward(self, latent_state: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            latent_state (torch.Tensor): shape (B, T, D)
+            latent_state (torch.Tensor): shape (B,  D)
         """
-        B, T, _ = latent_state.shape
-        x = latent_state.reshape((B * T, -1))
-        x = self._linear_layer(x)
-        x = x.reshape(
-            (B * T, self._starting_depth, self._starting_res, self._starting_res)
-        )
+        B, _ = latent_state.shape
+        x = self._linear_layer(latent_state)
+        x = x.reshape((B, self._starting_depth, self._starting_res, self._starting_res))
         decoded_images = self._cnn_network(x)
 
         if self._final_sigmoid:
             decoded_images = F.sigmoid(decoded_images)
 
         decoded_images = decoded_images.reshape(
-            (B, T, self._image_shape[0], self._image_shape[1], self._image_shape[2])
+            (B, self._image_shape[0], self._image_shape[1], self._image_shape[2])
         )
 
         return decoded_images
