@@ -100,11 +100,17 @@ def test_symlog_dist_shapes():
     """Tests that the aggregation and distance metric calculations
     of the symlog dist preserves the correct shapes"""
 
-    # (batch_length, batch_size, D)
+    # (batch_size, D)
     decoder_output = torch.randn((10, 20))
     symlog_dist = SymlogDist(decoder_output)
     loss = symlog_dist.loss(torch.randn((10, 20)))
     assert loss.shape == (10,)
+
+    # (B, T, D)
+    decoder_output = torch.randn((10, 15, 20))
+    symlog_dist = SymlogDist(decoder_output)
+    loss = symlog_dist.loss(torch.randn((10, 15, 20)))
+    assert loss.shape == (10, 15)
 
 
 def test_symlog_dist_values():

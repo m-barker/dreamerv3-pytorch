@@ -85,20 +85,19 @@ class MSEDist:
             mode (torch.Tensor): The output of the decoder network.
             Used to proxy the mean/mode of the distribution. Can think
             of it as a distribution with zero variance. Shape should
-            be (batch_length, h, w, c) where h, w, c are the
+            be (batch_size, h, w, c) where h, w, c are the
             height, width, and number of channels of the output respectively.
 
             agg (str, optional): Aggregation metric across batch dimensions.
             Can be either "mean" or "sum". Defaults to "sum".
 
         Raises:
-            ValueError: If the mode shape doesn't have 4 dimensions.
+            ValueError: If the mode shape doesn't have at least 4 dimensions.
         """
 
-        # Needed as we strip off the batch dimensions [2:]
-        if len(mode.shape) != 4:
+        if len(mode.shape) < 4:
             raise ValueError(
-                f"This is only used for images, must have 4 dims, given : {mode.shape}"
+                f"This is only used for images, must have at least 4 dims, given : {mode.shape}"
             )
 
         self._mode = mode
@@ -133,18 +132,17 @@ class MSEDist:
         """
         assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
 
-        # Needed as we strip off the batch dimensions
-        if len(value.shape) != 4:
+        if len(value.shape) < 4:
             raise ValueError(
-                f"Value shape must have at four dimensions. Given : {value.shape}"
+                f"Value shape must have at least four dimensions. Given : {value.shape}"
             )
 
         distance = (self._mode - value) ** 2
-        # [1:] to aggregate over pixels.
+        # [-3:] to aggregate over pixels.
         if self._agg == "mean":
-            loss = distance.mean(list(range(len(distance.shape)))[1:])
+            loss = distance.mean(list(range(len(distance.shape)))[-3:])
         elif self._agg == "sum":
-            loss = distance.sum(list(range(len(distance.shape)))[1:])
+            loss = distance.sum(list(range(len(distance.shape)))[-3:])
         else:
             raise NotImplementedError(self._agg)
         return -loss
@@ -163,7 +161,7 @@ class SymlogDist:
 
         Args:
             mode (torch.Tensor): The output of the decoder network. Used to proxy the mean/mode
-            of the 'distribution'. Tensor of shape (B, D) where D is the
+            of the 'distribution'. Tensor of shape (..., D) where D is the
             dimensionality of the vector that is being reconstructed.
 
             dist (str, optional): Distance metric to use between predicted and actual.
@@ -180,12 +178,6 @@ class SymlogDist:
             ValueError: If the mode shape is not equal to 2 dimensions.
 
         """
-
-        # Needed as strip off the batch dimensions [2:]
-        if len(mode.shape) != 2:
-            raise ValueError(
-                f"Mode shape must have two dimensions. Given: {mode.shape}"
-            )
 
         self._mode = mode
         self._dist = dist
@@ -215,16 +207,10 @@ class SymlogDist:
 
         Returns:
             torch.Tensor: The negative mean squared error or mean absolute error loss. The
-            Tensor is of shape (batch_length, batch_size), with the loss aggregated over the
+            Tensor is of shape (..., ), with the loss aggregated over the
             vector dimensions, using the given aggregation metric.
         """
         assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
-
-        # Needed as strip off the batch dimensions [2:]
-        if len(value.shape) != 2:
-            raise ValueError(
-                f"Value shape must have two dimensions. Given: {value.shape}"
-            )
 
         if self._dist == "mse":
             distance = (self._mode - symlog(value)) ** 2.0
@@ -235,12 +221,12 @@ class SymlogDist:
         else:
             raise NotImplementedError(self._dist)
 
-        # [1:] to aggregate over vector dimensions, i.e., strip off the
-        # batch dimension.
+        # Loss is computed over the vector dimension, assumed to be the last
+        # dimension
         if self._agg == "mean":
-            loss = distance.mean(list(range(len(distance.shape)))[1:])
+            loss = distance.mean(-1)
         elif self._agg == "sum":
-            loss = distance.sum(list(range(len(distance.shape)))[1:])
+            loss = distance.sum(-1)
         else:
             raise NotImplementedError(self._agg)
 

@@ -1,10 +1,157 @@
-from typing import Tuple
+from typing import Optional, Tuple, List, Dict, Union
+
+from dataclasses import dataclass, asdict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .shared import RMSNormWrapper, truncated_normal_weight_init
+from ..distributions.distributions import MSEDist, SymlogDist
+
+from .shared import (
+    MLP,
+    MLPParams,
+    RMSNormWrapper,
+    truncated_normal_weight_init,
+)
+
+
+@dataclass
+class DecoderCNNParams:
+    starting_res: int
+    latent_dim: int
+    kernel_size: int
+    starting_depth: int
+    depth_mults: Tuple[int, ...]
+    bias: bool
+    norm: bool
+    act_func: str
+    final_sigmoid: bool
+    image_shape: Tuple[int, int, int] = (64, 64, 3)
+
+
+class Decoder(nn.Module):
+    """
+    Decoder class to take (sequences of) a batch of latent states
+    and output reconstructed image observations, and optionally vector
+    observations.
+    """
+
+    def __init__(
+        self,
+        image_keys: List[str],
+        image_shapes: List[Tuple[int, int, int]],
+        cnn_params: DecoderCNNParams,
+        pixel_loss_agg: str = "sum",
+        vector_keys: Optional[List[str]] = None,
+        vector_shapes: Optional[List[int]] = None,
+        mlp_params: Optional[MLPParams] = None,
+        symlog_vecs: bool = True,
+    ):
+        super().__init__()
+        self._image_keys, self._image_shapes = zip(
+            *sorted(zip(image_keys, image_shapes))
+        )
+        # Assert that there is only one h,w element in the set of all h,w.
+        # I.e., a constant h,w for all image shapes
+        assert len({(h, w) for h, w, _ in self._image_shapes}) == 1, self._image_shapes
+
+        assert pixel_loss_agg in ("sum", "mean"), (
+            f"Invalid pixel loss aggregation method: {pixel_loss_agg}"
+        )
+
+        total_channels = sum(i[-1] for i in self._image_shapes)
+
+        self._cnn_params = cnn_params
+        self._cnn_params.image_shape = (
+            self._image_shapes[0][0],
+            self._image_shapes[0][1],
+            total_channels,
+        )
+        self._total_channels = total_channels
+        self._image_keys = list(self._image_keys)
+        self._cnn_decoder = CNNDecoder(**asdict(self._cnn_params))
+        self._pixel_loss_agg = pixel_loss_agg
+
+        self._vector_keys = vector_keys
+        if vector_keys is not None:
+            assert vector_shapes is not None
+            assert mlp_params is not None
+            self._vector_keys, self._vector_shapes = zip(
+                *sorted(zip(vector_keys, vector_shapes))
+            )
+            vector_dim = sum(i for i in self._vector_shapes)
+            self._mlp_params = mlp_params
+            self._mlp_params.out_dim = vector_dim
+            self._vector_keys = list(self._vector_keys)
+            self._mlp_decoder = MLP(**asdict(self._mlp_params))
+        self._symlog_vecs = symlog_vecs
+
+    def forward(
+        self, latent_states: torch.Tensor
+    ) -> Dict[str, Union[MSEDist, torch.Tensor, SymlogDist]]:
+        """
+        Args:
+            latent_states (torch.Tensor) latent states of shape (B, T, D) or
+            (B, D)
+
+        Returns:
+            Dict[str, torch.Tensor] dictionary of decoded observations, where
+            the key is the name of the observation. Each tensor used to construct
+            the distribution is either of shape (B, T, ...) or (B, ...) where ...
+            is the dimensionality of the observation.
+        """
+
+        T = None
+        if len(latent_states.shape) == 2:
+            B, _ = latent_states.shape
+        elif len(latent_states.shape) == 3:
+            B, T, _ = latent_states.shape
+        else:
+            raise ValueError(f"Invalid latent state shape, of {latent_states.shape}")
+
+        if T is not None:
+            latent_states = latent_states.reshape((B * T, -1))
+
+        decoded_imgs = self._cnn_decoder(latent_states)
+        if T is not None:
+            H, W, C = decoded_imgs.shape[1:]
+            decoded_imgs = decoded_imgs.reshape((B, T, H, W, C))
+
+        decoded_vecs = None
+        if self._vector_keys is not None:
+            decoded_vecs = self._mlp_decoder(latent_states)
+            if T is not None:
+                decoded_vecs = decoded_vecs.reshape((B, T, -1))
+
+        channel_start_index = 0
+        decoder_dict = {}
+        for name, shape in zip(self._image_keys, self._image_shapes):
+            n_channels = shape[-1]
+            decoded_image = decoded_imgs[
+                ..., channel_start_index : n_channels + channel_start_index
+            ]
+            dist = MSEDist(decoded_image, self._pixel_loss_agg)
+            decoder_dict[name] = dist
+
+            channel_start_index += n_channels
+
+        if decoded_vecs is not None:
+            vec_dim_start_index = 0
+            assert self._vector_keys is not None
+            for name, shape in zip(self._vector_keys, self._vector_shapes):
+                n_dims = shape
+                decoded_vec = decoded_vecs[
+                    ..., vec_dim_start_index : vec_dim_start_index + n_dims
+                ]
+                if self._symlog_vecs:
+                    dist = SymlogDist(decoded_vec)
+                else:
+                    dist = MSEDist(decoded_vec)
+                decoder_dict[name] = dist
+                vec_dim_start_index += n_dims
+
+        return decoder_dict
 
 
 class RepeatLayer(nn.Module):
@@ -42,7 +189,7 @@ class CNNDecoder(nn.Module):
         starting_depth: int,
         depth_mults: Tuple[int, ...],
         bias: bool,
-        norm: str,
+        norm: bool,
         act_func: str,
         final_sigmoid: bool,
     ) -> None:
@@ -65,8 +212,7 @@ class CNNDecoder(nn.Module):
 
             bias (bool): whether to use a bias in network components.
 
-            norm (str): normalisation method to use. Currently can either
-            be "none" or "rms"
+            norm (bool): whether to do RMS Layer Norm after each layer.
 
             act_func (str): string name of activiation function. Must match
             a PyTorch function.
@@ -81,8 +227,6 @@ class CNNDecoder(nn.Module):
         assert image_shape[0] == image_shape[1], (
             f"Resolution must be square, provided shape: {image_shape}"
         )
-
-        assert norm in ("none", "rms"), f"Unhandled norm method {norm} probided"
 
         self._image_shape = image_shape
         self._starting_res = starting_res
@@ -124,15 +268,14 @@ class CNNDecoder(nn.Module):
                     padding="same",  # Can use same since we enforce stride=1
                 )
             )
-            if self._norm != "none":
-                if self._norm == "rms":
-                    # (B, C, H, W) -> (B, H, W, C)
-                    layers.append(
-                        RMSNormWrapper(
-                            current_depth * depth_mult,
-                            permute=[0, 2, 3, 1],
-                        )
+            if self._norm:
+                # (B, C, H, W) -> (B, H, W, C)
+                layers.append(
+                    RMSNormWrapper(
+                        current_depth * depth_mult,
+                        permute=[0, 2, 3, 1],
                     )
+                )
             layers.append(activation_function())
             current_depth *= depth_mult
 
