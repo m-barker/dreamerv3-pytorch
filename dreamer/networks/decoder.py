@@ -30,6 +30,18 @@ class DecoderCNNParams:
     image_shape: Tuple[int, int, int] = (64, 64, 3)
 
 
+@dataclass
+class DecoderParams:
+    image_keys: List[str]
+    image_shapes: List[Tuple[int, int, int]]
+    cnn_params: DecoderCNNParams
+    pixel_loss_agg: str = "sum"
+    vector_keys: Optional[List[str]] = None
+    vector_shapes: Optional[List[int]] = None
+    mlp_params: Optional[MLPParams] = None
+    symlog_vecs: bool = True
+
+
 class Decoder(nn.Module):
     """
     Decoder class to take (sequences of) a batch of latent states
@@ -89,7 +101,7 @@ class Decoder(nn.Module):
 
     def forward(
         self, latent_states: torch.Tensor
-    ) -> Dict[str, Union[MSEDist, torch.Tensor, SymlogDist]]:
+    ) -> Dict[str, Union[MSEDist, SymlogDist]]:
         """
         Args:
             latent_states (torch.Tensor) latent states of shape (B, T, D) or

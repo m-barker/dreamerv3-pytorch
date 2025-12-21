@@ -161,6 +161,8 @@ def test_obs_step():
     assert result["deter"].shape == (8, 128)
     assert result["prior_sample"].shape == (8, 16, 8)
     assert result["post_sample"].shape == (8, 16, 8)
+    assert result["prior_logits"].shape == (8, 16, 8)
+    assert result["post_logits"].shape == (8, 16, 8)
 
 
 def test_observe():
@@ -190,6 +192,8 @@ def test_observe():
     assert out["deter"].shape == ((16, 32, 128))
     assert out["prior_sample"].shape == ((16, 32, 16, 8))
     assert out["post_sample"].shape == ((16, 32, 16, 8))
+    assert out["prior_logits"].shape == ((16, 32, 16, 8))
+    assert out["post_logits"].shape == ((16, 32, 16, 8))
 
 
 def test_img_step():

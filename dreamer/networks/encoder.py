@@ -28,6 +28,17 @@ class CNNParams:
     image_shape: Tuple[int, int, int] = (64, 64, 3)
 
 
+@dataclass
+class EncoderParams:
+    image_keys: List[str]
+    image_shapes: List[Tuple[int, int, int]]
+    cnn_params: CNNParams
+    vector_keys: Optional[List[str]] = None
+    vector_shapes: Optional[List[int]] = None
+    mlp_params: Optional[MLPParams] = None
+    symlog_vecs: bool = True
+
+
 class Encoder(nn.Module):
     """
     Encoder class to embed vector observations and image observations

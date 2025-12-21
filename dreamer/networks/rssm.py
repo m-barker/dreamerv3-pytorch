@@ -1,4 +1,5 @@
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -6,6 +7,26 @@ import torch.nn.functional as F
 
 from .shared import RMSNormWrapper, BlockLinearLayer, truncated_normal_weight_init
 from dreamer.distributions.distributions import OneHotDist
+
+
+@dataclass
+class RSSMParams:
+    deter_size: int  # size of deterministic latent component
+    n_stoch_dists: int  # number of stochastic distributions
+    n_stoch_cats: int  # number of categories in each distribution
+    encoded_size: int  # encoded dim of the encoder
+    hidden_size: int  # number of neurons per hidden layer
+    act_func: str  # name of the activation function to use after each layer
+    n_prior_layers: int
+    n_post_layers: int
+    n_deter_layers: int
+    layer_norm: bool
+    bias: bool
+    unimix: float  # prop of logits that come from mixing with a uniform dist
+    winit_scale: float  # mult for weight initialisation
+    n_blocks: int  # n_blocks in block GRU
+    action_dim: int  # total flattened action dim
+    device: Optional[torch.device] = None
 
 
 class DeterministicModule(nn.Module):

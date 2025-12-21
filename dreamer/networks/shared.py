@@ -69,6 +69,18 @@ class BernouliDistParams:
     pass
 
 
+@dataclass
+class MLPandHeadParams:
+    mlp_params: MLPParams
+    head_params: Union[
+        OneHotParams,
+        SymlogDistParams,
+        TwoHotDistParams,
+        BoundedNormalParams,
+        BernouliDistParams,
+    ]
+
+
 def truncated_normal_weight_init(layer: nn.Module, weight_scale: float = 1.0) -> None:
     """
     Applies truncated normal distribution weights initlisation,
@@ -251,10 +263,8 @@ class MLP(nn.Module):
             final_in = self._input_dim
         else:
             final_in = self._layer_width
+        # Final layer has no activation or layer norm, as it is the logits
         layers.append(nn.Linear(final_in, self._out_dim, bias=self._bias))
-        if self._layer_norm:
-            layers.append(RMSNormWrapper([self._out_dim]))
-        layers.append(act_func())
 
         return nn.Sequential(*layers)
 

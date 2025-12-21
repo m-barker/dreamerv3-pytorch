@@ -512,8 +512,12 @@ class BernoulliDist:
            value (torch.Tensor) of shape (B,). Should be either
            zero or one.
         """
-
-        return self._dist.log_prob(value.unsqueeze(-1)).squeeze()
+        if len(value.shape) == 1:
+            value = value.unsqueeze(-1)
+        value = value.to(torch.float32)
+        logp = F.logsigmoid(self._logits)
+        lognotp = F.logsigmoid(-self._logits)
+        return (value * logp + (1 - value) * lognotp).squeeze()
 
     def sample(self) -> torch.Tensor:
         """
