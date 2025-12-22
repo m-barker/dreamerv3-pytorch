@@ -1,4 +1,5 @@
 from typing import Union
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -6,6 +7,20 @@ import torch.nn as nn
 from dreamer.distributions.distributions import BoundedNormalDist, OneHotDist
 
 from .shared import OneHotParams, BoundedNormalParams, MLP, MLPDistHead
+
+
+@dataclass
+class ActorParams:
+    n_actions: int
+    action_dim: int
+    latent_state_size: int
+    n_layers: int
+    layer_width: int
+    act_func: str
+    layer_norm: bool
+    bias: bool
+    winit_scale: float
+    dist_params: Union[OneHotParams, BoundedNormalParams]
 
 
 class Actor(nn.Module):

@@ -1,7 +1,21 @@
+from dataclasses import dataclass
+
 import torch
 import torch.nn as nn
 
 from .shared import MLP, MLPDistHead, TwoHotDistParams, TwoHotDist
+
+
+@dataclass
+class CriticParams:
+    latent_state_size: int
+    n_layers: int
+    layer_width: int
+    act_func: str
+    layer_norm: bool
+    bias: bool
+    winit_scale: float
+    two_hot_params: TwoHotDistParams
 
 
 class Critic(nn.Module):

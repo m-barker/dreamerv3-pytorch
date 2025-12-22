@@ -1,3 +1,5 @@
+from dataclasses import fields
+
 import torch
 
 
@@ -38,3 +40,13 @@ def combine_det_and_stoch(deter: torch.Tensor, stoch: torch.Tensor) -> torch.Ten
         stoch = stoch.reshape((B, N * S))
 
     return torch.concatenate([deter, stoch], dim=-1)
+
+
+def asdict_shallow(dc):
+    """Helper for not converting nested dataclasses into dicts"""
+    result = {}
+    for f in fields(dc):
+        value = getattr(dc, f.name)
+        # do NOT recurse into nested dataclasses
+        result[f.name] = value
+    return result

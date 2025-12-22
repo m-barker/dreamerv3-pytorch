@@ -1,14 +1,12 @@
 from typing import Dict, Tuple, Optional, List, Union
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, asdict
 
 import torch
-from torch._subclasses.fake_impls import dyn_shape
 from torch.distributions.kl import kl_divergence
-import torch.nn as nn
 
+from dreamer.utils.utils import asdict_shallow, combine_det_and_stoch
 from dreamer.distributions.distributions import (
     BernoulliDist,
-    BoundedNormalDist,
     MSEDist,
     OneHotDist,
     SymlogDist,
@@ -31,16 +29,6 @@ class WorldModelTrainingParams:
     free_nats: float = 1.0
     # Used for the continuation loss
     imagination_horizon: int = 15
-
-
-def asdict_shallow(dc):
-    """Helper for not converting nested dataclasses into dicts"""
-    result = {}
-    for f in fields(dc):
-        value = getattr(dc, f.name)
-        # do NOT recurse into nested dataclasses
-        result[f.name] = value
-    return result
 
 
 class WorldModel:
@@ -182,12 +170,8 @@ class WorldModel:
             data["action"], encoded_obs, data["is_first"]
         )
 
-        post_latent = torch.concatenate(
-            [
-                latent_components["deter"],
-                latent_components["post_sample"].reshape((B, T, -1)),
-            ],
-            dim=-1,
+        post_latent = combine_det_and_stoch(
+            latent_components["deter"], latent_components["post_sample"]
         )
 
         decoder_in = (
