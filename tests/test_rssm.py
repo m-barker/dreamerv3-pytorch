@@ -216,12 +216,46 @@ def test_img_step():
     )
 
     action = torch.randn((8, 10))
-    is_first = torch.zeros((8, 1)).to(torch.int16)
+    prev_deter = torch.randn((8, 128))
+    prev_stoch = torch.randn((8, 16, 8))
 
-    result = rssm.img_step(action, is_first)
+    result = rssm.img_step(action, prev_deter, prev_stoch)
 
     assert isinstance(result["deter"], torch.Tensor)
     assert isinstance(result["prior_sample"], torch.Tensor)
 
     assert result["deter"].shape == (8, 128)
     assert result["prior_sample"].shape == (8, 16, 8)
+
+
+def test_img_sequence():
+    rssm = RSSM(
+        deter_size=128,
+        n_stoch_dists=16,
+        n_stoch_cats=8,
+        encoded_size=64,
+        hidden_size=32,
+        act_func="ReLU",
+        n_prior_layers=1,
+        n_post_layers=2,
+        n_deter_layers=1,
+        layer_norm=True,
+        bias=True,
+        unimix=0.01,
+        winit_scale=1.0,
+        n_blocks=8,
+        action_dim=10,
+    )
+
+    prev_deter = torch.randn((8, 128))
+    prev_stoch = torch.randn((8, 16, 8))
+    policy = lambda x: torch.randn((8, 10))
+
+    out = rssm.imagine_sequence(prev_deter, prev_stoch, 15, policy=policy)
+    assert out["deter"].shape == ((8, 16, 128))
+    assert out["prior_sample"].shape == ((8, 16, 16, 8))
+
+    actions = torch.randn((8, 15, 10))
+    out = rssm.imagine_sequence(prev_deter, prev_stoch, 15, actions=actions)
+    assert out["deter"].shape == ((8, 16, 128))
+    assert out["prior_sample"].shape == ((8, 16, 16, 8))

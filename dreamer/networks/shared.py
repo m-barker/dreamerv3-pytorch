@@ -247,7 +247,7 @@ class MLP(nn.Module):
 
         act_func = getattr(nn, self._act_func)
 
-        for i in range(self._n_layers - 1):
+        for i in range(self._n_layers):
             if i == 0:
                 layers.append(
                     nn.Linear(self._input_dim, self._layer_width, bias=self._bias)
@@ -259,10 +259,8 @@ class MLP(nn.Module):
             if self._layer_norm:
                 layers.append(RMSNormWrapper([self._layer_width]))
             layers.append(act_func())
-        if self._n_layers == 1:
-            final_in = self._input_dim
-        else:
-            final_in = self._layer_width
+
+        final_in = self._layer_width
         # Final layer has no activation or layer norm, as it is the logits
         layers.append(nn.Linear(final_in, self._out_dim, bias=self._bias))
 

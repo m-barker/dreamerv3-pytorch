@@ -158,11 +158,20 @@ class WorldModel:
 
         return loss_dict
 
-    def train(self, data: Dict[str, torch.Tensor]):
+    def train(
+        self, data: Dict[str, torch.Tensor]
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
         """
         Args:
             data [Dict[str, torch.Tensor]]: pre-processed replay
             buffer data, each tensor is of shape (B, T, ...)
+
+        Returns:
+            Tuple[Dict[str, torch.Tensor], torch.Tensor] dictionary of
+            loss scalars for each components and computed posterior latent
+            states by the world model, which are then used for the starting
+            imagination states to train the actor-critic.
+
         """
         encoded_obs = self._encoder.forward(data)
         B, T = encoded_obs.shape[0], encoded_obs.shape[1]
@@ -217,4 +226,4 @@ class WorldModel:
             data, latent_components, reconstructed_obs, reward_dist, continue_dist
         )
 
-        return loss
+        return loss, post_latent

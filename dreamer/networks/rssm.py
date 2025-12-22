@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from dataclasses import dataclass
 
 import torch
@@ -7,6 +7,7 @@ import torch.nn.functional as F
 
 from .shared import RMSNormWrapper, BlockLinearLayer, truncated_normal_weight_init
 from dreamer.distributions.distributions import OneHotDist
+from dreamer.utils.utils import combine_det_and_stoch
 
 
 @dataclass
@@ -523,9 +524,8 @@ class RSSM:
     def img_step(
         self,
         prev_action: torch.Tensor,
-        is_first: torch.Tensor,
-        prev_deter: Optional[torch.Tensor] = None,
-        prev_stoch: Optional[torch.Tensor] = None,
+        prev_deter: torch.Tensor,
+        prev_stoch: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         """
         Single "imagination" step, which computes the deterministic state and the
@@ -534,20 +534,10 @@ class RSSM:
         Args:
             prev_action (torch.Tensor): previous actions of shape (B, self._action_size)
 
-            is_first (torch.Tensor): mask for if current state is the first in a trajectory.
-            of shape (B, 1)
+            prev_deter (torch.Tensor): previous deter latent of shape (B, self._deter_size)
+
+            prev_stoch (torch.Tensor): previous stoch latent of shape (B, self._n_dists, self._n_cats)
         """
-
-        assert (prev_deter is None) == (prev_stoch is None), (
-            "prev_deter and prev_post must either both be None or both not None"
-        )
-        # Don't need the or, but needed to make Pyright behave.
-        if prev_deter is None or prev_stoch is None:
-            prev_deter, prev_stoch = self._get_initial_state(prev_action.shape[0])
-
-        # Make zeros wherever is_first is == 1 denoting start of trajectory
-        prev_deter = self._handle_is_first(prev_deter, is_first)
-        prev_stoch = self._handle_is_first(prev_stoch, is_first)
 
         # (B, n_dist, n_cats) -> (B, n_dist * n_cats)
         prev_stoch = prev_stoch.reshape(prev_stoch.shape[0], self._stoch_dim)
@@ -565,3 +555,67 @@ class RSSM:
             "prior_logits": prior_logits,
             "prior_sample": prior_sample,
         }
+
+    def imagine_sequence(
+        self,
+        starting_deter: torch.Tensor,
+        starting_stoch: torch.Tensor,
+        length: int,
+        policy: Optional[Callable] = None,
+        actions: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Imagines a sequence of latent states from a given set of starting states. Uses either a callable
+        policy that takes as input a latent state and outputs an action, or executes pre-defined
+        actions in the form of a Tensor.
+
+        Args:
+            starting_deter (torch.Tensor) starting (batch of) latent states to imagine from. Of shape
+            (B, D)
+
+            starting_stoch (torch.Tensor) starting (batch of) stochastic state samples to imageine from.
+            of shape (B, N, S)
+
+            length (int): number of steps from current state to imagine.
+
+            policy (Optional[Callable]) policy that is callable with a batch of latent states to output
+            an action. Defaults to None. Either the policy or actions must be provided.
+
+            actions (Optional[torch.Tensor]): fixed actions to imagine with at each timestep. Must be
+            of shape (B, length, D)
+        """
+
+        prev_deter = starting_deter
+        prev_stoch = starting_stoch
+
+        seq_outputs = {
+            "deter": [starting_deter],
+            "prior_logits": [],
+            "prior_sample": [starting_stoch],
+        }
+
+        for t in range(length):
+            if policy is not None:
+                latent = combine_det_and_stoch(prev_deter, prev_stoch)
+                prev_action = policy(latent)
+            elif actions is not None:
+                assert actions.shape[1] == length, (
+                    f"Invalid number of actions given: {actions.shape}"
+                )
+                prev_action = actions[:, t]
+            else:
+                raise ValueError(
+                    "Must provide either a callable policy or a tensor of actions"
+                )
+            out = self.img_step(prev_action, prev_deter, prev_stoch)
+
+            prev_deter = out["deter"]
+            prev_stoch = out["prior_sample"]
+
+            for k in seq_outputs.keys():
+                seq_outputs[k].append(out[k])
+
+        # Stack outputs along time dimension
+        seq_outputs = {k: torch.stack(v, dim=1) for k, v in seq_outputs.items()}
+
+        return seq_outputs

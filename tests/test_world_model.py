@@ -127,7 +127,7 @@ def test_train():
     world_model = get_world_model()
     data = get_mock_data()
 
-    loss_dict = world_model.train(data)
+    loss_dict, _ = world_model.train(data)
 
     for loss_name, loss_val in loss_dict.items():
         assert loss_val.shape == ()
