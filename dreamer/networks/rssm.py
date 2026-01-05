@@ -592,6 +592,7 @@ class RSSM:
             "deter": [starting_deter],
             "prior_logits": [],
             "prior_sample": [starting_stoch],
+            "action": [],
         }
 
         for t in range(length):
@@ -611,6 +612,7 @@ class RSSM:
 
             prev_deter = out["deter"]
             prev_stoch = out["prior_sample"]
+            out["action"] = prev_action
 
             for k in seq_outputs.keys():
                 seq_outputs[k].append(out[k])

@@ -1,4 +1,4 @@
-from typing import Dict, Tuple, Optional, List, Union
+from typing import Callable, Dict, Tuple, Optional, List, Union
 from dataclasses import dataclass, asdict
 
 import torch
@@ -145,6 +145,24 @@ class WorldModel:
         loss_dict["representation"] = -rep_loss
 
         return loss_dict
+
+    def imagine_sequence(
+        self,
+        starting_deter: torch.Tensor,
+        starting_stoch: torch.Tensor,
+        length: int,
+        policy: Optional[Callable] = None,
+        actions: Optional[torch.Tensor] = None,
+    ):
+        return self._rssm.imagine_sequence(
+            starting_deter, starting_stoch, length, policy, actions
+        )
+
+    def predict_reward(self, latent_states: torch.Tensor) -> torch.Tensor:
+        pass
+
+    def predict_cont(self, latent_states: torch.Tensor) -> torch.Tensor:
+        pass
 
     def train(
         self, data: Dict[str, torch.Tensor]

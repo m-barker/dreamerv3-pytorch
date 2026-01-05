@@ -3,6 +3,33 @@ from dataclasses import fields
 import torch
 
 
+class PercentNorm:
+    def __init__(
+        self,
+        low: float = 0.05,
+        high: float = 0.95,
+        rate: float = 0.01,
+        limit: float = 1.0,
+    ):
+        self._low = low
+        self._high = high
+        self._rate = rate
+        self._limit = limit
+
+        self._range = torch.tensor([self._low, self._high])
+
+    def __call__(self, unnormed_input: torch.Tensor, ema_vals: torch.Tensor):
+        unnormed_in_flat = torch.flatten(unnormed_input.detach())
+        x_quantile = torch.quantile(
+            input=unnormed_in_flat, q=self._range.to(unnormed_in_flat.device)
+        )
+
+        ema_vals[:] = self._rate * x_quantile + (1 - self._rate) * ema_vals
+        scale = torch.clip(ema_vals[1] - ema_vals[0], min=self._limit)
+        offset = ema_vals[0]
+        return offset.detach(), scale.detach()
+
+
 def combine_det_and_stoch(deter: torch.Tensor, stoch: torch.Tensor) -> torch.Tensor:
     """
     Combines the deterministic and stochastic latent state components into a single
