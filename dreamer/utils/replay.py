@@ -113,7 +113,6 @@ class Buffer:
         self._buffer.add(TensorDict(transition, batch_size=[]))
 
         if len(self._buffer) % self._save_every:
-            print(f"Saving... to {self._disk_path}")
             self._buffer.dumps(self._disk_path)
 
     def sample(

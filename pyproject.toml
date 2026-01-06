@@ -5,11 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = "==3.11.13"
 dependencies = [
+    "dm-control>=1.0.34",
     "flake8>=7.3.0",
     "pytest>=9.0.2",
     "python-lsp-server>=1.13.0",
     "ruff>=0.12.8",
     "setuptools>=80.9.0",
+    "shimmy[all,dm-control,testing]>=2.0.0",
     "torch",
     "torchrl>=0.10.1",
     "torchvision",

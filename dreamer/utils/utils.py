@@ -1,6 +1,9 @@
+from typing import Tuple
 from dataclasses import fields
 
+import numpy as np
 import torch
+import cv2
 
 
 class PercentNorm:
@@ -77,3 +80,23 @@ def asdict_shallow(dc):
         # do NOT recurse into nested dataclasses
         result[f.name] = value
     return result
+
+
+def resize_image(
+    source_image: np.ndarray,
+    target_size: Tuple[int, int],
+    resize_method: cv2.INTER_AREA,
+) -> np.ndarray:
+    """
+    Resizes the given image using openCV.
+
+    Args:
+        source_image (np.ndarray): source image of shape (H, W, C)
+
+        target_size (Tuple[int, int]): desired H, W
+
+        resize_method (optional): openCV resizing method. Defaults
+        to cv2.INTER_AREA
+    """
+
+    return cv2.resize(source_image, target_size, interpolation=resize_method)
