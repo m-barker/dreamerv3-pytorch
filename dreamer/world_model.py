@@ -159,10 +159,61 @@ class WorldModel:
         )
 
     def predict_reward(self, latent_states: torch.Tensor) -> torch.Tensor:
-        pass
+        """
+        Returns the reward head's predicted reward for each latent state in the
+        batch.
+
+        Args:
+            latent_states (torch.Tensor): latent states of shape (B,D) or (B, T, D)
+
+        Returns:
+            torch.Tensor: predicted reward of shape (B, 1) or (B, T, 1), in the
+            original data space.
+        """
+        if len(latent_states.shape) == 3:
+            B, T, D = latent_states.shape
+        else:
+            assert len(latent_states.shape) == 2, (
+                f"Invalid number of dimensions of latent states: {latent_states.shape}"
+            )
+            B, D = latent_states.shape
+            T = None
+        if T is not None:
+            latent_states = latent_states.reshape(B * T, D)
+        reward_logits = self._reward_network(latent_states)
+        reward_dist = self._reward_head(reward_logits)
+        pred = reward_dist.predict()
+        if T is not None:
+            pred = pred.reshape(B, T, 1)
+        return pred
 
     def predict_cont(self, latent_states: torch.Tensor) -> torch.Tensor:
-        pass
+        """
+        Returns the predicted probability that the trajectory continues for
+        each latent state in the batch.
+
+        Args:
+            latent_states (torch.Tensor): latent states of shape (B, D) or (B, T, D)
+
+        Returns:
+            torch.Tensor: predicted continues of shape (B) or (B, T)
+        """
+        if len(latent_states.shape) == 3:
+            B, T, D = latent_states.shape
+        else:
+            assert len(latent_states.shape) == 2, (
+                f"Invalid number of dimensions of latent states: {latent_states.shape}"
+            )
+            B, D = latent_states.shape
+            T = None
+        if T is not None:
+            latent_states = latent_states.reshape(B * T, D)
+        continue_logits = self._continue_network(latent_states)
+        continue_dist = self._continue_head(continue_logits)
+        pred = continue_dist.pred()
+        if T is not None:
+            pred = pred.reshape(B, T)
+        return pred
 
     def train(
         self, data: Dict[str, torch.Tensor]

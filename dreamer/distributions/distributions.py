@@ -479,7 +479,6 @@ class BoundedNormalDist:
         Args:
             value (torch.Tensor) of shape (B, D)
         """
-
         return self._dist.log_prob(value)
 
     def entropy(self) -> torch.Tensor:

@@ -16,7 +16,7 @@ BATCH_SIZE = 4
 BATCH_LENGTH = 8
 
 
-def get_world_model() -> WorldModel:
+def get_world_model(action_dim: int = 10) -> WorldModel:
     training_params = WorldModelTrainingParams()
     enc_cnn_params = CNNParams(
         initial_depth=24,
@@ -66,7 +66,7 @@ def get_world_model() -> WorldModel:
         unimix=0.01,
         winit_scale=1.0,
         n_blocks=8,
-        action_dim=10,
+        action_dim=action_dim,
     )
     reward_network_params = MLPParams(
         input_dim=264,

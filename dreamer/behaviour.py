@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,7 +13,6 @@ from dreamer.world_model import WorldModel
 
 @dataclass
 class BehaviourTrainingParams:
-    slow_val: bool
     lam: float
     imag_horizon: int = 15
     ret_norm: bool = True
@@ -21,6 +20,11 @@ class BehaviourTrainingParams:
     ret_norm_max: float = 0.95
     ret_norm_limit: float = 1.0
     ret_norm_rate: float = 0.01
+    ent_weight: float = 3e-4
+    slow_reg: float = 1.0
+    slow_val: bool = True
+    slow_target_update: int = 1
+    slow_target_frac: float = 0.02
 
 
 class Behaviour(nn.Module):
@@ -40,9 +44,11 @@ class Behaviour(nn.Module):
         self._training_params = training_params
 
         self._slow_val_target = None
+        self._slow_val_updates = 0
         if self._training_params.slow_val:
             self._slow_val_target = Critic(**asdict_shallow(critic_params))
 
+        self._ret_norm = None
         if self._training_params.ret_norm:
             self._ret_norm = PercentNorm(
                 self._training_params.ret_norm_min,
@@ -88,6 +94,20 @@ class Behaviour(nn.Module):
 
         return torch.stack(list(reversed(lambda_returns))[:-1], 1)
 
+    def _update_slow_target(self) -> None:
+        """Updates the slow target network, which is an expoential moving
+        average of the critic network's weights.
+        """
+        if self._slow_val_target is None:
+            return
+        if self._slow_val_updates % self._training_params.slow_target_update == 0:
+            mix = self._training_params.slow_target_frac
+            for s, d in zip(
+                self._critic.parameters(), self._slow_val_target.parameters()
+            ):
+                d.data = mix * s.data + (1 - mix) * d.data
+            self._slow_val_updates += 1
+
     def imag_train(
         self,
         world_model: WorldModel,
@@ -95,21 +115,50 @@ class Behaviour(nn.Module):
         starting_stoch: torch.Tensor,
         reward_func: Optional[Callable] = None,
         continue_func: Optional[Callable] = None,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Trains the actor and critic inside of the world model.
+
+        Args:
+            world_model (WorldModel): world model instance.
+
+            starting_deter (torch.Tensor): starting deterministic latent
+            state component of shape (B, D)
+
+            starting_stoch (torch.Tensor): starting stochastic latent
+            state component of shape (B, D)
+
+            reward_func (callable, optional): optional reward function to use
+            to predict the reward of the latent states. If None, uses the
+            world model's reward head. Defaults to None.
+
+            continue_func (callable, optional): optional continue function to
+            use to predict whether the trjactory continues at each latent state.
+            If None, uses the world model's continue head. Defaults to None.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: actor loss and critic loss, averaged
+            over batch and time dimensions.
+        """
+        self._update_slow_target()
+
         out = world_model.imagine_sequence(
             starting_deter,
             starting_stoch,
             self._training_params.imag_horizon,
-            self._actor.forward_sample,  # TODO: make this function
+            self._actor.forward_sample,
         )
-        # Shape (B, H, D)
+        # Shape (B, H, D) contains the prev_action, so out["action"][0] corresponds to the
+        # prev action for out["deter"][1]
         imagined_actions = out["action"]
+
         # Shape (B, H + 1, D)
         imagined_latents = combine_det_and_stoch(out["deter"], out["prior_sample"])
 
-        # TODO: flatten and reshape
-        policy = self._actor(imagined_latents)
-        imagined_value = self._critic(imagined_latents)
+        policy = self._actor(imagined_latents[:, :-1])
+
+        # Shape (B, H + 1, 1)
+        imagined_value = self._critic.forward_and_pred(imagined_latents)
 
         if reward_func is not None:
             imagined_reward = reward_func(imagined_latents)
@@ -121,4 +170,41 @@ class Behaviour(nn.Module):
         else:
             imagined_cont = world_model.predict_cont(imagined_latents)
 
-        ret = self._lambda_return(imagined_reward, imagined_value, imagined_cont)
+        # Shape (B, H)
+        ret = self._lambda_return(
+            imagined_reward.squeeze(), imagined_value.squeeze(), imagined_cont
+        )
+
+        ret_offset = 0.0
+        ret_scale = 1.0
+        if self._ret_norm is not None:
+            ret_offset, ret_scale = self._ret_norm(ret, self.ret_norm_vals)
+        advantage = (ret - imagined_value[:, :-1].squeeze()) / ret_scale
+
+        logpi = policy.log_prob(imagined_actions.detach())
+        policy_ent = policy.entropy()
+        if len(logpi.shape) == 3:
+            logpi = logpi.sum(-1)
+            assert len(policy_ent.shape) == 3
+            policy_ent = policy_ent.sum(-1)
+        # REINFORCE - increase logprobs of actions with high advantage
+        policy_loss = imagined_cont[:, :-1].detach() * -(
+            logpi * advantage.detach() + policy_ent * self._training_params.ent_weight
+        )
+
+        B, H, _ = imagined_latents[:, :-1].shape
+        flattened_latents = imagined_latents[:, :-1].reshape((B * H, -1))
+        value_dist = self._critic(flattened_latents)
+        slow_val_dist = self._slow_val_target(flattened_latents)
+
+        # Rehsape RET to (B*H, 1)
+        val_loss = value_dist.loss(ret.detach().flatten().unsqueeze(-1))
+
+        flattened_cont = imagined_cont[:, :-1].reshape((B * H, -1))
+        value_loss = flattened_cont.detach() * (
+            val_loss
+            + self._training_params.slow_reg
+            * value_dist.loss(slow_val_dist.predict().unsqueeze(-1))
+        )
+
+        return policy_loss.mean(), value_loss.mean()

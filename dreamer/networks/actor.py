@@ -115,8 +115,25 @@ class Actor(nn.Module):
 
         return policy
 
+    def forward_sample(self, latent_state: torch.Tensor) -> torch.Tensor:
+        """
+        Takes in a batch of latent states, and returns a sample from the
+        created policy.
+
+        Args:
+            latent_state (torch.Tensor): of shape (B, D)
+
+        Returns:
+            torch.Tensor of shape (B, self._n_actions * self._action_dim)
+        """
+        policy = self.forward(latent_state)
+        return self.draw_from_policy(policy, reshape=False)
+
     def draw_from_policy(
-        self, policy: Union[BoundedNormalDist, OneHotDist], sample: bool = True
+        self,
+        policy: Union[BoundedNormalDist, OneHotDist],
+        sample: bool = True,
+        reshape: bool = True,
     ) -> torch.Tensor:
         """
         Draws an action from the policy and does appropriate reshaping to convert
@@ -140,7 +157,9 @@ class Actor(nn.Module):
 
         batch_size = action.shape[0]
 
-        return action.reshape((batch_size, self._n_actions, self._action_dim))
+        if reshape:
+            return action.reshape((batch_size, self._n_actions, self._action_dim))
+        return action
 
 
 if __name__ == "__main__":
