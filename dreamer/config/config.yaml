@@ -1,0 +1,23 @@
+defaults:
+  - model: 12m
+  - env: minigrid
+  - _self_
+
+# Experiment Settings
+seed: 42
+device: "cuda"
+total_steps: 1e6
+batch_size: 16
+batch_length: 64
+compile: True
+eval_every: 10000
+save_every: 50000
+log_every: 5000
+# Whether to save a new set of weights every time, or overwrite
+checkpoint: False
+
+replay:
+  capacity: 1e6
+  disk_path: "./storage/replay_buffer/"
+  load_existing: False
+

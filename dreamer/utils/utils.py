@@ -85,7 +85,7 @@ def asdict_shallow(dc):
 def resize_image(
     source_image: np.ndarray,
     target_size: Tuple[int, int],
-    resize_method: cv2.INTER_AREA,
+    resize_method=cv2.INTER_AREA,
 ) -> np.ndarray:
     """
     Resizes the given image using openCV.

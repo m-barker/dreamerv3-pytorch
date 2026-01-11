@@ -2,7 +2,11 @@ from typing import Callable, Dict, Tuple, Optional, List, Union
 from dataclasses import dataclass, asdict
 
 import torch
+import torch.nn as nn
+import numpy as np
+import torch.distributions as torchd
 from torch.distributions.kl import kl_divergence
+from PIL import Image
 
 from dreamer.utils.utils import asdict_shallow, combine_det_and_stoch
 from dreamer.distributions.distributions import (
@@ -51,7 +55,9 @@ class WorldModel:
 
         self._rssm = RSSM(**asdict(rssm_params))
         self._encoder = Encoder(**asdict_shallow(encoder_params)).to(self._device)
+        # self._encoder = torch.compile(self._encoder)
         self._decoder = Decoder(**asdict_shallow(decoder_params)).to(self._device)
+        # self._decoder = torch.compile(self._decoder)
 
         self._reward_network = None
         self._reward_head = None
@@ -63,19 +69,43 @@ class WorldModel:
             self._reward_network = MLP(**asdict(reward_params.mlp_params)).to(
                 self._device
             )
-            self._reward_head = MLPDistHead(reward_params.head_params)
+            # self._reward_network = torch.compile(self._reward_network)
+            self._reward_head = MLPDistHead(reward_params.head_params).to(self._device)
         if continue_params is not None:
             self._continue_network = MLP(**asdict(continue_params.mlp_params)).to(
                 self._device
             )
-            self._continue_head = MLPDistHead(continue_params.head_params)
+            # self._continue_network = torch.compile(self._continue_network)
+            self._continue_head = MLPDistHead(continue_params.head_params).to(
+                self._device
+            )
+            # self._continue_head = torch.compile(self._continue_head)
 
         valid_grad_components = ("encoder", "decoder", "reward", "continue")
         for component in grad_components:
-            assert component in valid_grad_components, (
-                f"Invalid grad component {component}"
-            )
+            assert (
+                component in valid_grad_components
+            ), f"Invalid grad component {component}"
         self._grad_components = grad_components
+
+    def get_parameters(self) -> List[nn.Parameter]:
+        params: List[nn.Parameter] = []
+
+        params += list(self._rssm.parameters())
+        params += list(self._encoder.parameters())
+        params += list(self._decoder.parameters())
+
+        if self._reward_network is not None:
+            params += list(self._reward_network.parameters())
+        if self._reward_head is not None:
+            params += list(self._reward_head.parameters())
+
+        if self._continue_network is not None:
+            params += list(self._continue_network.parameters())
+        if self._continue_head is not None:
+            params += list(self._continue_head.parameters())
+
+        return params
 
     def _compute_loss(
         self,
@@ -96,15 +126,21 @@ class WorldModel:
             # Normalise images
             if obs_name in self._encoder._image_keys:
                 target = target / 255.0
+            # Reward, continuation can be stored as 1D tensors
+            if len(target.shape) == 1:
+                target = target.unsqueeze(-1)
             # Average over batch and time dimensions
-            loss = obs_recon.loss(target).mean(dim=(0, 1))
+            loss = -obs_recon.loss(target).mean(dim=(0, 1))
             loss *= self._training_params.decoder_loss_scale
             loss_dict[obs_name] = loss
 
         B, T = data["reward"].shape[0], data["reward"].shape[1]
         if reward_pred is not None:
             target = data["reward"].detach().reshape((B * T, *data["reward"].shape[2:]))
-            loss = -reward_pred.loss(target).mean(dim=0)
+            if len(target.shape) == 1:
+                target = target.unsqueeze(-1)
+            loss = reward_pred.loss(target)
+            loss = loss.mean(dim=0)
             loss *= self._training_params.reward_loss_scale
             loss_dict["reward"] = loss
 
@@ -115,7 +151,7 @@ class WorldModel:
             # at each step, as otherwise when bootstrapping values beyond the imagination
             # horizon, the model may more easily assign certain continuation
             target *= 1 - 1 / self._training_params.imagination_horizon
-            loss = cont_pred.log_prob(target).mean(dim=0)
+            loss = -cont_pred.log_prob(target).mean(dim=0)
             loss *= self._training_params.continue_loss_scale
             loss_dict["continue"] = loss
 
@@ -126,23 +162,27 @@ class WorldModel:
 
         post_dist = OneHotDist(post_logits.detach(), unimix_ratio=self._rssm._unimix)
         prior_dist = OneHotDist(prior_logits, unimix_ratio=self._rssm._unimix)
+        post_dist = torchd.independent.Independent(post_dist, 1)
+        prior_dist = torchd.independent.Independent(prior_dist, 1)
 
         dynamics_loss = kl_divergence(post_dist, prior_dist)
         dynamics_loss = torch.clip(dynamics_loss, min=self._training_params.free_nats)
         dynamics_loss = dynamics_loss.mean()
         dynamics_loss *= self._training_params.dynamics_loss_scale
 
-        loss_dict["dynamics"] = -dynamics_loss
+        loss_dict["dynamics"] = dynamics_loss
 
         post_dist = OneHotDist(post_logits, unimix_ratio=self._rssm._unimix)
         prior_dist = OneHotDist(prior_logits.detach(), unimix_ratio=self._rssm._unimix)
+        post_dist = torchd.independent.Independent(post_dist, 1)
+        prior_dist = torchd.independent.Independent(prior_dist, 1)
 
         rep_loss = kl_divergence(post_dist, prior_dist)
         rep_loss = torch.clip(rep_loss, min=self._training_params.free_nats)
         rep_loss = rep_loss.mean()
         rep_loss *= self._training_params.representation_loss_scale
 
-        loss_dict["representation"] = -rep_loss
+        loss_dict["representation"] = rep_loss
 
         return loss_dict
 
@@ -173,9 +213,9 @@ class WorldModel:
         if len(latent_states.shape) == 3:
             B, T, D = latent_states.shape
         else:
-            assert len(latent_states.shape) == 2, (
-                f"Invalid number of dimensions of latent states: {latent_states.shape}"
-            )
+            assert (
+                len(latent_states.shape) == 2
+            ), f"Invalid number of dimensions of latent states: {latent_states.shape}"
             B, D = latent_states.shape
             T = None
         if T is not None:
@@ -187,7 +227,9 @@ class WorldModel:
             pred = pred.reshape(B, T, 1)
         return pred
 
-    def predict_cont(self, latent_states: torch.Tensor) -> torch.Tensor:
+    def predict_cont(
+        self, latent_states: torch.Tensor, soft: bool = False
+    ) -> torch.Tensor:
         """
         Returns the predicted probability that the trajectory continues for
         each latent state in the batch.
@@ -201,19 +243,56 @@ class WorldModel:
         if len(latent_states.shape) == 3:
             B, T, D = latent_states.shape
         else:
-            assert len(latent_states.shape) == 2, (
-                f"Invalid number of dimensions of latent states: {latent_states.shape}"
-            )
+            assert (
+                len(latent_states.shape) == 2
+            ), f"Invalid number of dimensions of latent states: {latent_states.shape}"
             B, D = latent_states.shape
             T = None
         if T is not None:
             latent_states = latent_states.reshape(B * T, D)
         continue_logits = self._continue_network(latent_states)
         continue_dist = self._continue_head(continue_logits)
-        pred = continue_dist.pred()
+        if soft:
+            pred = continue_dist.mean()
+        else:
+            pred = continue_dist.pred()
         if T is not None:
             pred = pred.reshape(B, T)
         return pred
+
+    def decode_images_and_save(
+        self, latent_state: torch.Tensor, img_path: str = "decoded_img.png"
+    ) -> None:
+        decoder_dict = self._decoder.forward(latent_state)
+        decoder_dist = decoder_dict["image"]
+        recon_images = decoder_dist.mean()
+        recon_images = recon_images.detach().cpu().numpy().squeeze() * 255
+        recon_images = np.rint(recon_images).astype(np.uint8)
+        # print(recon_images)
+        # print(recon_images.shape)
+
+        im = Image.fromarray(recon_images)
+        im.save(img_path)
+
+    def get_posterior(
+        self,
+        obs: Dict[str, torch.Tensor],
+        prev_action,
+        is_first,
+        prev_deter,
+        prev_stoch,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        encoded_obs = self._encoder.forward(obs)
+        if is_first:
+            is_first = torch.ones(1, 1).to(torch.int32).to(self._device)
+        else:
+            is_first = torch.zeros(1, 1).to(torch.int32).to(self._device)
+        if len(prev_action.shape) == 1:
+            prev_action = prev_action.unsqueeze(0)
+        latent_components = self._rssm.obs_step(
+            prev_action, encoded_obs, is_first, prev_deter, prev_stoch
+        )
+        return latent_components["deter"], latent_components["post_sample"]
 
     def train(
         self, data: Dict[str, torch.Tensor]
@@ -236,7 +315,7 @@ class WorldModel:
             encoded_obs = encoded_obs.detach()
 
         latent_components = self._rssm.observe_sequence(
-            data["action"], encoded_obs, data["is_first"]
+            data["prev_action"], encoded_obs, data["is_first"]
         )
 
         post_latent = combine_det_and_stoch(
@@ -279,4 +358,4 @@ class WorldModel:
             data, latent_components, reconstructed_obs, reward_dist, continue_dist
         )
 
-        return loss, post_latent
+        return loss, latent_components["deter"], latent_components["post_sample"]

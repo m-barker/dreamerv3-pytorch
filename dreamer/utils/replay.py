@@ -3,7 +3,7 @@ import random
 
 import torch
 from tensordict import TensorDict
-from torchrl.data import ReplayBuffer, LazyMemmapStorage
+from torchrl.data import ReplayBuffer, LazyMemmapStorage, LazyTensorStorage
 
 
 class Buffer:
@@ -30,7 +30,7 @@ class Buffer:
             Defaults to 10,000
         """
 
-        self._buffer = ReplayBuffer(storage=LazyMemmapStorage(max_size=capacity))
+        self._buffer = ReplayBuffer(storage=LazyTensorStorage(max_size=capacity))
         self._keys = keys_to_sample
 
         # We create this key to transitions to assign a UUID to each episode
@@ -112,7 +112,8 @@ class Buffer:
         transition["episode_id"] = torch.tensor([self._episode_id])
         self._buffer.add(TensorDict(transition, batch_size=[]))
 
-        if len(self._buffer) % self._save_every:
+        if len(self._buffer) % self._save_every == 0:
+            print("Saving buffer....")
             self._buffer.dumps(self._disk_path)
 
     def sample(

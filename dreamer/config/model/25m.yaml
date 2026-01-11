@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - base
+
+# 25M model parameters
+hidden_size: 384
+encoder_init_depth: 24
+deter_size: 3072
+n_stoch_cats: 24
+latent_dim: 3840

@@ -238,9 +238,17 @@ class MLP(nn.Module):
 
         self._network = self._build_network()
         # Have to use a lambda to pass the winit_scale arg in
-        self._network.apply(
-            lambda m: truncated_normal_weight_init(m, self._winit_scale)
-        )
+        self._network.apply(lambda m: truncated_normal_weight_init(m, 1.0))
+
+        if self._winit_scale != 1.0:
+            final_layer = self._network[-1]
+            if isinstance(final_layer, nn.Linear):
+                with torch.no_grad():
+                    final_layer.weight.mul_(self._winit_scale)
+                    # Optional: some prefer to keep bias at 0,
+                    # but mul_(0) on bias is safe if you want absolute zero output
+                    if final_layer.bias is not None:
+                        final_layer.bias.mul_(self._winit_scale)
 
     def _build_network(self) -> nn.Sequential:
         layers = []

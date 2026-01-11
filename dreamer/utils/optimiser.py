@@ -14,9 +14,10 @@ class SimpleDreamerOptimizer:
         eps=1e-8,
         weight_decay=0.0,
         grad_clip=100.0,
-        use_amp=True,
+        use_amp=False,
     ):
         self.parameters = list(parameters)
+        print(f"Total parameters: {sum(p.numel() for p in parameters)}")
         self.optimizer = torch.optim.AdamW(
             self.parameters,
             lr=lr,
@@ -35,7 +36,7 @@ class SimpleDreamerOptimizer:
         self.optimizer.zero_grad(set_to_none=True)
 
         # Backward with AMP
-        with autocast(enabled=self.use_amp):
+        with torch.amp.autocast(enabled=self.use_amp, device_type="cuda"):
             self.scaler.scale(loss).backward()
 
         # Unscale gradients for clipping

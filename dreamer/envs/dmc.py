@@ -38,7 +38,7 @@ class DMCWrapper:
         self._seed = seed
         self._return_high_res_image = return_high_res_img
 
-        self._env = gym.make(f"dmc_control/{self._task_name}", render_mode="rgb_array")
+        self._env = gym.make(f"dm_control/{self._task_name}", render_mode="rgb_array")
         self._step_count = 0
         self._max_steps = max_steps
 
@@ -50,13 +50,17 @@ class DMCWrapper:
             {"image": gym.spaces.Box(0, 255, image_size, dtype=np.unit8)}
         )
 
+    @property
+    def action_space(self):
+        return self._env.action_space
+
     def reset(self) -> Tuple[Dict, Dict]:
         """Resets the environment using the seed passed into the constructor
 
         Returns:
             Tuple[Dict, Dict] obs, info
         """
-        obs, info = self._env.reset(self._seed)
+        obs, info = self._env.reset(seed=self._seed)
         image_obs = self._env.render()
 
         resized_img = image_obs
@@ -82,9 +86,9 @@ class DMCWrapper:
         Args:
             action
         """
-        assert action.shape == self._env.action_space.shape, (
-            f"Given action shape {action.shape} does not match required environment shape: {self._env.action_space.shape}"
-        )
+        assert (
+            action.shape == self._env.action_space.shape
+        ), f"Given action shape {action.shape} does not match required environment shape: {self._env.action_space.shape}"
         if isinstance(action, torch.Tensor):
             action = action.detach().cpu().numpy()
 

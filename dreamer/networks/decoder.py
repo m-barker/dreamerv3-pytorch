@@ -180,8 +180,7 @@ class RepeatLayer(nn.Module):
         Args:
             x (torch.Tensor): shape (B, C, H, W)
         """
-        x = x.repeat((1, 1, 2, 2))
-        return x
+        return F.interpolate(x, scale_factor=2, mode="nearest")
 
 
 class CNNDecoder(nn.Module):
@@ -247,8 +246,9 @@ class CNNDecoder(nn.Module):
         # Reverse this, as want to reverse the CNN encoder
         # Drop the last one, as we want the final CNN to have a
         # depth equal to the number of image channels.
-        self._depth_mults = reversed(list(depth_mults[:-1]))
         self._starting_depth = depth_mults[-1] * starting_depth
+        self._init_depth = starting_depth
+        self._depth_mults = reversed(list(depth_mults[:-1]))
         self._bias = bias
         self._norm = norm
         self._act_func = act_func
@@ -273,7 +273,7 @@ class CNNDecoder(nn.Module):
             layers.append(
                 nn.Conv2d(
                     in_channels=current_depth,
-                    out_channels=current_depth * depth_mult,
+                    out_channels=self._init_depth * depth_mult,
                     kernel_size=self._kernel_size,
                     stride=1,
                     bias=self._bias,
@@ -284,12 +284,12 @@ class CNNDecoder(nn.Module):
                 # (B, C, H, W) -> (B, H, W, C)
                 layers.append(
                     RMSNormWrapper(
-                        current_depth * depth_mult,
+                        self._init_depth * depth_mult,
                         permute=[0, 2, 3, 1],
                     )
                 )
             layers.append(activation_function())
-            current_depth *= depth_mult
+            current_depth = self._init_depth * depth_mult
 
         # Final layer needs to have the same number of channels as the source image
         layers.append(RepeatLayer())

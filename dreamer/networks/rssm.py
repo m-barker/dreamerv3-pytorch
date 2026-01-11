@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple, List
 from dataclasses import dataclass
 
 import torch
@@ -283,9 +283,23 @@ class RSSM:
             self._winit_scale,
             self._act_func_name,
         ).to(device)
+        self._block_gru = torch.compile(self._block_gru)
 
-        self._prior_logit_network = self._build_prior_network().to(device)
-        self._post_logit_network = self._build_post_network().to(device)
+        self._prior_logit_network = (
+            self._build_prior_network().apply(truncated_normal_weight_init).to(device)
+        )
+        self._prior_logit_network = torch.compile(self._prior_logit_network)
+        self._post_logit_network = (
+            self._build_post_network().apply(truncated_normal_weight_init).to(device)
+        )
+        self._post_logit_network = torch.compile(self._post_logit_network)
+
+    def parameters(self) -> List[nn.Parameter]:
+        params = []
+        params += self._block_gru.parameters()
+        params += self._prior_logit_network.parameters()
+        params += self._post_logit_network.parameters()
+        return params
 
     def _build_prior_network(self) -> nn.Sequential:
         """
@@ -376,7 +390,6 @@ class RSSM:
         Returns:
            OneHotDist - prior distribution
         """
-
         state = torch.concatenate([deter, embed], dim=-1)
         post_logits = self._post_logit_network(state)
         post_logits = post_logits.reshape(
@@ -412,6 +425,12 @@ class RSSM:
         # to make broadcasting possible
         if len(data.shape) == 3:
             is_first = is_first.unsqueeze(-1)
+            if len(is_first.shape) == 2:
+                is_first = is_first.unsqueeze(-1)
+        # (B, ) -> (B, 1)
+        if len(is_first.shape) == 1:
+            is_first = is_first.unsqueeze(-1)
+
         return data * (~is_first)
 
     def observe_sequence(
@@ -498,6 +517,7 @@ class RSSM:
         # Make zeros wherever is_first is == 1 denoting start of trajectory
         prev_deter = self._handle_is_first(prev_deter, is_first)
         prev_post = self._handle_is_first(prev_post, is_first)
+        prev_action = self._handle_is_first(prev_action, is_first)
 
         # (B, n_dist, n_cats) -> (B, n_dist * n_cats)
         prev_post = prev_post.reshape(prev_post.shape[0], self._stoch_dim)
@@ -598,7 +618,7 @@ class RSSM:
         for t in range(length):
             if policy is not None:
                 latent = combine_det_and_stoch(prev_deter, prev_stoch)
-                prev_action = policy(latent)
+                prev_action = policy(latent.detach())
             elif actions is not None:
                 assert actions.shape[1] == length, (
                     f"Invalid number of actions given: {actions.shape}"

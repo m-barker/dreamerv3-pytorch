@@ -118,7 +118,7 @@ def get_mock_data():
         "reward": reward,
         "continue": continues,
         "is_first": is_first,
-        "action": actions,
+        "prev_action": actions,
     }
     return data
 
@@ -127,7 +127,7 @@ def test_train():
     world_model = get_world_model()
     data = get_mock_data()
 
-    loss_dict, _ = world_model.train(data)
+    loss_dict, _, _ = world_model.train(data)
 
     for loss_name, loss_val in loss_dict.items():
         assert loss_val.shape == ()

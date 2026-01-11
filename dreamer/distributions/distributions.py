@@ -131,7 +131,6 @@ class MSEDist:
             loss aggregated over the height, width, and channel dimensions.
         """
         assert self._mode.shape == value.shape, (self._mode.shape, value.shape)
-
         if len(value.shape) < 4:
             raise ValueError(
                 f"Value shape must have at least four dimensions. Given : {value.shape}"
@@ -244,7 +243,8 @@ class TwoHotDist:
         n_bins: int = 255,
         min_bin_val: float = -20.0,
         max_bin_val: float = 20.0,
-        symexp_bins: bool = True,
+        symexp_bins: bool = False,
+        device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
     ) -> None:
         """
         Builds the bins of the two hot index.
@@ -266,17 +266,18 @@ class TwoHotDist:
             spaced. Defaults to True.
 
         """
-        assert logits.shape[-1] == n_bins, (
-            f"Logits shape of {logits.shape} is inconsistent with the given number of bins {n_bins}"
-        )
+        assert (
+            logits.shape[-1] == n_bins
+        ), f"Logits shape of {logits.shape} is inconsistent with the given number of bins {n_bins}"
         self._logits = logits
         self._probs = torch.softmax(logits, dim=-1)
         self._n_bins = n_bins
         self._min_bin_val = min_bin_val
         self._max_bin_val = max_bin_val
         self._symexp_bins = symexp_bins
+        self._device = device
 
-        self._bins = self._construct_bins()
+        self._bins = self._construct_bins().to(self._device)
 
     def _construct_bins(self) -> torch.Tensor:
         """
@@ -308,7 +309,7 @@ class TwoHotDist:
             # For even bins, to keep symetry we have two bins that are zero
             return torch.concatenate([lower_bins, upper_bins], dim=-1)
 
-    def predict(self, symlog_ret: bool = True) -> torch.Tensor:
+    def predict(self) -> torch.Tensor:
         """
         Computes the weighted average of bins multiplied by their probabilities.
         As with the official JAX implementation, uses a symetric sum to prevent
@@ -316,11 +317,7 @@ class TwoHotDist:
         goes left to right, meaning we start adding lots of large negative numbers
         which can cause fp errors.
 
-        Args:
-            symlog_ret (bool, optional): whether to return the values back to their original
-            data dim by passing through the symlog function. Defaults to true
         """
-
         if self._n_bins % 2 == 1:
             midpoint = (self._n_bins - 1) // 2
             lower_probs = self._probs[..., :midpoint]
@@ -347,9 +344,6 @@ class TwoHotDist:
             weighted_avg = (
                 (lower_probs * lower_bins).flip([-1]) + (upper_probs * upper_bins)
             ).sum(-1)
-
-        if symlog_ret:
-            return symlog(weighted_avg)
         return weighted_avg
 
     def loss(self, target: torch.Tensor) -> torch.Tensor:
@@ -357,7 +351,7 @@ class TwoHotDist:
         Computes the negative log probability of the target given the networks
         probabilities.
 
-        Target is the true values, i.e., not passed through symexp
+        Target is the true values, i.e., not passed through symlog
 
         Args:
            target (torch.Tensor): of shape (B, 1)
@@ -365,11 +359,9 @@ class TwoHotDist:
         Returns:
            log_prob (torch.Tensor) of shape (B)
         """
-        assert len(target.shape) == 2, (
-            f"TwoHotDist target has incorrect shape of {target.shape}"
-        )
-        with torch.no_grad():
-            target = symexp(target)
+        assert (
+            len(target.shape) == 2
+        ), f"TwoHotDist target has incorrect shape of {target.shape}"
 
         # Find the index of the lowest bin
         # [1, 1, 1, 1, 0, 0, 0 , ...] sum of ones is 4, -1 to convert to idx
@@ -439,9 +431,9 @@ class BoundedNormalDist:
 
         """
 
-        assert max_std >= min_std, (
-            f"Max_std {max_std} can't be lower than min_std {min_std}"
-        )
+        assert (
+            max_std >= min_std
+        ), f"Max_std {max_std} can't be lower than min_std {min_std}"
         # Sigmoid outputs in tange (0, 1), essentially choosing where in the range
         # (min_std, max_std) the scaled_std should fall. Bias is assed to encourage
         # high_std, especially early on in learning where the modelled std may be
@@ -530,3 +522,6 @@ class BernoulliDist:
 
     def mode(self) -> torch.Tensor:
         return self.pred()
+
+    def mean(self) -> torch.Tensor:
+        return F.sigmoid(self._logits)

@@ -1,7 +1,9 @@
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, List
 
 import torch
+
+torch.set_float32_matmul_precision("high")
 import torch.nn as nn
 
 
@@ -39,14 +41,19 @@ class Behaviour(nn.Module):
     ) -> None:
         super().__init__()
         self._device = device if device is not None else torch.device("cpu")
-        self._actor = Actor(**asdict_shallow(actor_params))
-        self._critic = Critic(**asdict_shallow(critic_params))
+        self._actor = Actor(**asdict_shallow(actor_params)).to(self._device)
+        self._actor = torch.compile(self._actor)
+        self._critic = Critic(**asdict_shallow(critic_params)).to(self._device)
+        self._critic = torch.compile(self._critic)
         self._training_params = training_params
 
         self._slow_val_target = None
         self._slow_val_updates = 0
         if self._training_params.slow_val:
-            self._slow_val_target = Critic(**asdict_shallow(critic_params))
+            self._slow_val_target = Critic(**asdict_shallow(critic_params)).to(
+                self._device
+            )
+            self._slow_val_target = torch.compile(self._slow_val_target)
 
         self._ret_norm = None
         if self._training_params.ret_norm:
@@ -57,6 +64,13 @@ class Behaviour(nn.Module):
                 self._training_params.ret_norm_limit,
             )
             self.register_buffer("ret_norm_vals", torch.zeros((2,)).to(self._device))
+
+    def get_parameters(self) -> List[nn.Parameter]:
+        params = []
+        params += self._actor.parameters()
+        params += self._critic.parameters()
+
+        return params
 
     def _lambda_return(
         self,
@@ -108,6 +122,9 @@ class Behaviour(nn.Module):
                 d.data = mix * s.data + (1 - mix) * d.data
             self._slow_val_updates += 1
 
+    def act(self, latent_state: torch.Tensor) -> torch.Tensor:
+        return self._actor.forward_sample(latent_state)
+
     def imag_train(
         self,
         world_model: WorldModel,
@@ -141,19 +158,21 @@ class Behaviour(nn.Module):
             over batch and time dimensions.
         """
         self._update_slow_target()
-
-        out = world_model.imagine_sequence(
-            starting_deter,
-            starting_stoch,
-            self._training_params.imag_horizon,
-            self._actor.forward_sample,
-        )
+        with torch.no_grad():
+            out = world_model.imagine_sequence(
+                starting_deter.detach(),
+                starting_stoch.detach(),
+                self._training_params.imag_horizon,
+                self._actor.forward_sample,
+            )
         # Shape (B, H, D) contains the prev_action, so out["action"][0] corresponds to the
         # prev action for out["deter"][1]
         imagined_actions = out["action"]
 
         # Shape (B, H + 1, D)
-        imagined_latents = combine_det_and_stoch(out["deter"], out["prior_sample"])
+        imagined_latents = combine_det_and_stoch(
+            out["deter"], out["prior_sample"]
+        ).detach()
 
         policy = self._actor(imagined_latents[:, :-1])
 
@@ -163,12 +182,14 @@ class Behaviour(nn.Module):
         if reward_func is not None:
             imagined_reward = reward_func(imagined_latents)
         else:
-            imagined_reward = world_model.predict_reward(imagined_latents)
+            with torch.no_grad():
+                imagined_reward = world_model.predict_reward(imagined_latents)
 
         if continue_func is not None:
             imagined_cont = continue_func(imagined_latents)
         else:
-            imagined_cont = world_model.predict_cont(imagined_latents)
+            with torch.no_grad():
+                imagined_cont = world_model.predict_cont(imagined_latents, soft=True)
 
         # Shape (B, H)
         ret = self._lambda_return(
@@ -187,8 +208,13 @@ class Behaviour(nn.Module):
             logpi = logpi.sum(-1)
             assert len(policy_ent.shape) == 3
             policy_ent = policy_ent.sum(-1)
+        cum_continue = torch.cumprod(imagined_cont[:, :-1], dim=-1).detach()
+        # Shift the continues right by one, to not mask out the terminal state.
+        cum_continue = torch.cat(
+            [torch.ones_like(cum_continue[:, :1]), cum_continue[:, :-1]], dim=-1
+        ).detach()
         # REINFORCE - increase logprobs of actions with high advantage
-        policy_loss = imagined_cont[:, :-1].detach() * -(
+        policy_loss = cum_continue * -(
             logpi * advantage.detach() + policy_ent * self._training_params.ent_weight
         )
 
@@ -196,12 +222,11 @@ class Behaviour(nn.Module):
         flattened_latents = imagined_latents[:, :-1].reshape((B * H, -1))
         value_dist = self._critic(flattened_latents)
         slow_val_dist = self._slow_val_target(flattened_latents)
-
         # Rehsape RET to (B*H, 1)
         val_loss = value_dist.loss(ret.detach().flatten().unsqueeze(-1))
 
-        flattened_cont = imagined_cont[:, :-1].reshape((B * H, -1))
-        value_loss = flattened_cont.detach() * (
+        flattened_cont = cum_continue.reshape((B * H, -1))
+        value_loss = flattened_cont * (
             val_loss
             + self._training_params.slow_reg
             * value_dist.loss(slow_val_dist.predict().unsqueeze(-1))

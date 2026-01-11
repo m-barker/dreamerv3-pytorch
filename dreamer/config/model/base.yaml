@@ -1,0 +1,126 @@
+# Constants across all model sizes
+
+###### MODEL ARCHITECTURE #######
+rssm:
+  deter_size: ${deter_size}
+  n_stoch_dists: 32
+  n_stoch_cats: ${n_stoch_cats}
+  encoded_size: ${encoder_embed_dim}
+  hidden_size: ${hidden_size}
+  act_func: "SiLU"
+  n_prior_layers: 2
+  n_post_layers: 1
+  n_deter_layers: 1
+  layer_norm: True
+  bias: True
+  unimix: 0.01
+  winit_scale: 1.0
+  n_blocks: 8
+cnn_encoder:
+  initial_depth: ${encoder_init_depth}
+  kernel_size: 5
+  stride: 1
+  min_res: 4
+  bias: True
+  norm: True
+  act_func: "SiLU"
+  max_pool: True
+  depth_mult: [2,3,4,4]
+  max_pool_stride: 2
+  max_pool_kernel: 2
+cnn_decoder:
+  latent_dim: ${latent_dim}
+  starting_depth: ${cnn_encoder.initial_depth}
+  starting_res: 4
+  kernel_size: 5
+  depth_mults: [2,3,4,4]
+  bias: True
+  norm: True
+  act_func: "SiLU"
+  final_sigmoid: True
+reward_head:
+  n_bins: 255
+  min_bin_val: -20.0
+  max_bin_val: 20.0
+  symexp_bins: True
+reward_mlp:
+  input_dim: ${latent_dim}
+  layer_width: ${hidden_size}
+  out_dim: ${reward_head.n_bins}
+  n_layers: 1
+  act_func: "SiLU"
+  layer_norm: True
+  bias: True
+  winit_scale: 0.0
+continue_mlp:
+  input_dim: ${latent_dim}
+  layer_width: ${hidden_size}
+  out_dim: 1
+  n_layers: 1
+  act_func: "SiLU"
+  layer_norm: True
+  bias: True
+  winit_scale: 1.0
+actor_discrete_head:
+  unimix: 0.01
+actor_cont_head:
+  min_std: 0.1
+  max_std: 1.0
+actor:
+  latent_state_size: ${latent_dim}
+  layer_width: ${hidden_size}
+  n_layers: 3
+  act_func: "SiLU"
+  layer_norm: True
+  bias: True
+  winit_scale: 0.01
+critic_head:
+  n_bins: 255
+  min_bin_val: -20.0
+  max_bin_val: 20.0
+  symexp_bins: True
+critic:
+  latent_state_size: ${latent_dim}
+  layer_width: ${hidden_size}
+  n_layers: 3
+  act_func: "SiLU"
+  layer_norm: True
+  bias: True
+  winit_scale: 0.0
+##### MODEL TRAINING HYPER-PARAMETERS ###########
+world_model_grad_components: ["encoder", "decoder", "reward", "continue"]
+imag_horizon: 15
+world_model_training:
+  decoder_loss_scale: 1.0
+  reward_loss_scale: 1.0
+  continue_loss_scale: 1.0
+  dynamics_loss_scale: 1.0
+  representation_loss_scale: 0.1
+  free_nats: 1.0
+  imagination_horizon: ${imag_horizon}
+behaviour_training:
+  lam: 0.95
+  imag_horizon: ${imag_horizon}
+  ret_norm: True
+  ret_norm_min: 0.05
+  ret_norm_max: 0.95
+  ret_norm_limit: 1.0
+  ret_norm_rate: 0.01
+  ent_weight: 3e-4
+  slow_val: True
+  slow_reg: 1.0
+  slow_target_udpate: 1
+  slow_target_frac: 0.02
+##### MODEL OPTIMISERS ###############
+world_model_optim:
+  lr: 4e-5
+  weight_decay: 0.0
+  grad_clip: 1000.0
+  use_amp: False
+behaviour_optim:
+  lr: 4e-5
+  weight_decay: 0.0
+  grad_clip: 100.0
+  use_amp: False
+
+
