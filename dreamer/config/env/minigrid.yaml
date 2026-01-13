@@ -1,0 +1,10 @@
+# MiniGrid-specific parameters
+suite_name: "minigrid"
+task_name: "MiniGrid-Empty-8x8-v0"
+image_res: [64,64]
+image_keys: ["image"]
+vector_keys: []
+extra_keys: []
+max_steps: 100
+seed: ${seed}
+model_steps_per_env_step: 512
