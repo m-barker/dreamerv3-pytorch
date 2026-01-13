@@ -2,11 +2,11 @@ from typing import Tuple, Dict, Optional, Union
 
 import torch
 import gymnasium as gym
-from gymnasium.wrappers import RescaleAction, ClipAction
 import numpy as np
 import shimmy  # import needed to trigger the registrations of dm environments
 
 from dreamer.utils.utils import resize_image
+from dreamer.envs.wrappers import UnscaleAction
 
 
 class DMCWrapper:
@@ -40,8 +40,7 @@ class DMCWrapper:
         self._return_high_res_image = return_high_res_img
 
         self._env = gym.make(f"dm_control/{self._task_name}", render_mode="rgb_array")
-        self._env = RescaleAction(self._env, min_action=-1.0, max_action=1.0)
-        self._env = ClipAction(self._env)
+        self._env = UnscaleAction(self._env)
         self._step_count = 0
         self._max_steps = max_steps
 
