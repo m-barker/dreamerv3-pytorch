@@ -126,6 +126,14 @@ class Behaviour(nn.Module):
                 d.data = mix * s.data + (1 - mix) * d.data
             self._slow_val_updates += 1
 
+    def predict_values(self, latent_states: torch.Tensor) -> torch.Tensor:
+        """
+        Predicts and returns the Critic's estimate of the value of each
+        given latent state
+        """
+
+        return self._critic.forward_and_pred(latent_states)
+
     def act(self, latent_state: torch.Tensor) -> torch.Tensor:
         return self._actor.forward_sample(latent_state)
 
@@ -188,7 +196,6 @@ class Behaviour(nn.Module):
         else:
             with torch.no_grad():
                 imagined_reward = world_model.predict_reward(imagined_latents)
-                
 
         if continue_func is not None:
             imagined_cont = continue_func(imagined_latents)

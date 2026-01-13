@@ -1,8 +1,9 @@
-from typing import Tuple, List
+from typing import Tuple, List, Optional, Dict
 import time
 import torch
 import numpy as np
 import wandb
+import matplotlib.pyplot as plt
 
 from gymnasium.spaces.discrete import Discrete
 from omegaconf import DictConfig, open_dict, OmegaConf
@@ -268,18 +269,120 @@ class Dreamer:
             step=self._total_env_training_steps,
         )
 
-    def _log_wm_predictions_plot(self) -> None:
+    def _log_wm_predictions_plot(
+        self, start_obs: Optional[Dict] = None, horizon: int = 15
+    ) -> None:
         # 1. Plan a sequence of latent states using world model + policy.
         # 2. Decoded imagined latents to images.
         # 3. Tile images in plot using matplotlib
         # 4. Annotate images with predicted reward, continuation, and value.
         # 5. Compare with ground truth observations (?)
-        pass
+        if start_obs is None:
+            obs, _ = self._eval_env.reset()
+        else:
+            obs = start_obs
+        true_images = [obs[self._config.env.image_keys[0]]]
+        true_reward = [0.0]
+        true_continue = [1.0]
+        tensor_obs = {
+            k: torch.tensor(v).unsqueeze(0).to(self._device)
+            for k, v in obs.items()
+            if k in self._keys_to_store
+        }
+        with torch.no_grad():
+            deter, stoch = self._world_model.get_posterior(
+                tensor_obs,
+                torch.zeros(self._n_actions * self._action_dim).to(self._device),
+                True,
+            )
+            out = self._world_model.imagine_sequence(
+                deter, stoch, horizon, self._behaviour._actor.forward_sample
+            )
+            imagined_latents = combine_det_and_stoch(out["deter"], out["prior_sample"])
+
+            # All are numpy arrays of shape (H+1, ...)
+            decoded_images = self._world_model.decode_images(imagined_latents)
+            imagined_reward = (
+                self._world_model.predict_reward(imagined_latents)
+                .squeeze()
+                .cpu()
+                .numpy()
+            )
+            imagined_cont = (
+                self._world_model.predict_cont(imagined_latents).squeeze().cpu().numpy()
+            )
+            imagined_val = (
+                self._behaviour.predict_values(imagined_latents).squeeze().cpu().numpy()
+            )
+        # Drop batch dimension
+        imagined_actions = out["action"].squeeze()
+        for t in range(horizon):
+            obs, reward, terminated, truncated, info = self._eval_env.step(
+                imagined_actions[t].detach().cpu().numpy()
+            )
+            true_images.append(obs[self._config.env.image_keys[0]])
+            true_reward.append(reward)
+            true_continue.append(int(not terminated))
+
+        T = horizon + 1
+
+        def draw_caption(ax, text, color="white"):
+            ax.text(
+                0.5,
+                -0.08,
+                text,
+                transform=ax.transAxes,
+                ha="center",
+                va="top",
+                fontsize=9,
+                color=color,
+                bbox=dict(facecolor="black", alpha=0.6, pad=2),
+                clip_on=False,
+            )
+
+        fig, axes = plt.subplots(2, T, figsize=(2.5 * T, 5), squeeze=False)
+
+        for t in range(T):
+            ax = axes[0, t]
+            img = decoded_images[t]
+            ax.imshow(img)
+            ax.axis("off")
+
+            ax.set_title(f"t={t}", fontsize=10)
+
+            draw_caption(
+                ax,
+                f"r={imagined_reward[t]:.2f}  "
+                f"c={imagined_cont[t]:.2f}  "
+                f"v={imagined_val[t]:.2f}",
+            )
+
+            ax = axes[1, t]
+            img = true_images[t]
+            ax.imshow(img)
+            ax.axis("off")
+
+            draw_caption(
+                ax,
+                f"r={true_reward[t]:.2f}  c={true_continue[t]}",
+            )
+
+        # Row labels
+        axes[0, 0].set_ylabel("Imagined", fontsize=12)
+        axes[1, 0].set_ylabel("True", fontsize=12)
+
+        plt.tight_layout()
+        self._wandb_run.log(
+            {"evaluation/wm_pred": wandb.Image(fig)},
+            step=self._total_env_training_steps,
+        )
+        plt.close(fig)
 
     @torch.no_grad()
     def step_environment_train(self, random_actions: bool, n_steps: int):
         for _ in range(n_steps):
             if self._total_env_training_steps % self._config.eval_every == 0:
+                self._log_wm_predictions_plot()
                 self.step_environment_eval(self._config.n_eval_episodes)
             if self._total_env_training_steps % self._config.log_every == 0:
                 self._train_log()
@@ -423,7 +526,8 @@ class Dreamer:
         print(f"Step: {self._total_env_training_steps}")
         print(f"Mean eval reward: {mean_eval_reward}")
         self._wandb_run.log(
-            {"eval_ret": mean_eval_reward}, step=self._total_env_training_steps
+            {"evaluation/eval_ret": mean_eval_reward},
+            step=self._total_env_training_steps,
         )
         self._log_video(video_obs)
 

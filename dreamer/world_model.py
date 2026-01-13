@@ -264,27 +264,22 @@ class WorldModel:
             pred = pred.reshape(B, T)
         return pred
 
-    def decode_images_and_save(
-        self, latent_state: torch.Tensor, img_path: str = "decoded_img.png"
-    ) -> None:
+    def decode_images(self, latent_state: torch.Tensor) -> np.ndarray:
         decoder_dict = self._decoder.forward(latent_state)
         decoder_dist = decoder_dict["image"]
         recon_images = decoder_dist.mean()
         recon_images = recon_images.detach().cpu().numpy().squeeze() * 255
         recon_images = np.rint(recon_images).astype(np.uint8)
-        # print(recon_images)
-        # print(recon_images.shape)
 
-        im = Image.fromarray(recon_images)
-        im.save(img_path)
+        return recon_images
 
     def get_posterior(
         self,
         obs: Dict[str, torch.Tensor],
         prev_action,
         is_first,
-        prev_deter,
-        prev_stoch,
+        prev_deter=None,
+        prev_stoch=None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         encoded_obs = self._encoder.forward(obs)
         if is_first:
