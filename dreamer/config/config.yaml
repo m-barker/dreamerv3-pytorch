@@ -12,11 +12,14 @@ batch_length: 64
 compile: True
 eval_every: 10000
 n_eval_episodes: 10
-save_every: 50000
+save_every: 500
 log_every: 500
 prefill_steps: 2500
 # Whether to save a new set of weights every time, or overwrite
 checkpoint: False
+weights_dir: "./storage/weights/"
+load_existing: False
+load_existing_path: "./storage/weights/latest.pt"
 wandb: True
 wandb_project: "dreamerv3-pytorch"
 

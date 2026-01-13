@@ -514,9 +514,9 @@ class RSSM:
             is_first (torch.Tensor): mask for if current state is the first in a trajectory.
             of shape (B, 1)
         """
-        assert (prev_deter is None) == (
-            prev_post is None
-        ), "prev_deter and prev_post must either both be None or both not None"
+        assert (prev_deter is None) == (prev_post is None), (
+            "prev_deter and prev_post must either both be None or both not None"
+        )
         # Don't need the or, but needed to make Pyright behave.
         if prev_deter is None or prev_post is None:
             prev_deter, prev_post = self._get_initial_state(prev_action.shape[0])
@@ -583,6 +583,26 @@ class RSSM:
             "prior_sample": prior_sample,
         }
 
+    def state_dict(self) -> Dict[str, Dict[str, torch.Tensor]]:
+        return {
+            "block_gru": self._block_gru.state_dict(),
+            "prior_logit_network": self._prior_logit_network.state_dict(),
+            "post_logit_network": self._post_logit_network.state_dict(),
+        }
+
+    def load_state_dict(
+        self,
+        state: Dict[str, Dict[str, torch.Tensor]],
+        strict: bool = True,
+    ):
+        self._block_gru.load_state_dict(state["block_gru"], strict=strict)
+        self._prior_logit_network.load_state_dict(
+            state["prior_logit_network"], strict=strict
+        )
+        self._post_logit_network.load_state_dict(
+            state["post_logit_network"], strict=strict
+        )
+
     def imagine_sequence(
         self,
         starting_deter: torch.Tensor,
@@ -627,9 +647,9 @@ class RSSM:
                 latent = combine_det_and_stoch(prev_deter, prev_stoch)
                 prev_action = policy(latent.detach())
             elif actions is not None:
-                assert (
-                    actions.shape[1] == length
-                ), f"Invalid number of actions given: {actions.shape}"
+                assert actions.shape[1] == length, (
+                    f"Invalid number of actions given: {actions.shape}"
+                )
                 prev_action = actions[:, t]
             else:
                 raise ValueError(

@@ -39,7 +39,9 @@ class Buffer:
             self._keys.append("episode_id")
 
         if load_existing:
-            self._buffer.loads(disk_path)
+            self.load_compact(disk_path)
+            # self._buffer.loads(disk_path)
+            print(f"Replay buffer loaded with {len(self._buffer)} steps")
 
         os.makedirs(disk_path, exist_ok=True)
 
@@ -47,6 +49,9 @@ class Buffer:
         self._save_every = save_every
         # Used to assign a UUID to each episode
         self._episode_id = 0
+
+    def __len__(self) -> int:
+        return len(self._buffer)
 
     def _sample(self, batch_size: int, batch_length: int):
         sequences = []
@@ -117,7 +122,20 @@ class Buffer:
 
         if len(self._buffer) % self._save_every == 0:
             print("Saving buffer....")
-            self._buffer.dumps(self._disk_path)
+            self.save_compact(self._disk_path)
+            # self._buffer.dumps(self._disk_path)
+
+    def save_compact(self, path: str):
+        length = len(self._buffer)
+        td = self._buffer.storage[:length]
+        torch.save(td, os.path.join(path, "buffer.pt"))
+
+    def load_compact(self, path: str):
+        path = os.path.join(path, "buffer.pt")
+        if os.path.exists(path):
+            print(f"Loading replay buffer at path: {path}")
+            td = torch.load(path, weights_only=False)
+            self._buffer.extend(td)
 
     def sample(
         self,

@@ -1,3 +1,5 @@
+from typing import Dict, Any
+
 import torch
 from torch.nn.utils import clip_grad_norm_
 from torch.cuda.amp import autocast, GradScaler
@@ -47,3 +49,17 @@ class SimpleDreamerOptimizer:
         # Optimizer step
         self.scaler.step(self.optimizer)
         self.scaler.update()
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "optimizer": self.optimizer.state_dict(),
+            "scaler": self.scaler.state_dict() if self.use_amp else None,
+            "grad_clip": self.grad_clip,
+            "use_amp": self.use_amp,
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        self.optimizer.load_state_dict(state["optimizer"])
+
+        if self.use_amp and state.get("scaler") is not None:
+            self.scaler.load_state_dict(state["scaler"])

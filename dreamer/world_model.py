@@ -190,6 +190,46 @@ class WorldModel:
 
         return loss_dict
 
+    def state_dict(self) -> Dict[str, Dict[str, torch.Tensor]]:
+        state = {
+            "rssm": self._rssm.state_dict(),
+            "encoder": self._encoder.state_dict(),
+            "decoder": self._decoder.state_dict(),
+        }
+
+        if self._reward_network is not None:
+            state["reward_network"] = self._reward_network.state_dict()
+        if self._reward_head is not None:
+            state["reward_head"] = self._reward_head.state_dict()
+
+        if self._continue_network is not None:
+            state["continue_network"] = self._continue_network.state_dict()
+        if self._continue_head is not None:
+            state["continue_head"] = self._continue_head.state_dict()
+
+        return state
+
+    def load_state_dict(
+        self,
+        state: Dict[str, Dict[str, torch.Tensor]],
+        strict: bool = True,
+    ):
+        self._rssm.load_state_dict(state["rssm"], strict=strict)
+        self._encoder.load_state_dict(state["encoder"], strict=strict)
+        self._decoder.load_state_dict(state["decoder"], strict=strict)
+
+        if self._reward_network is not None and "reward_network" in state:
+            self._reward_network.load_state_dict(state["reward_network"], strict=strict)
+        if self._reward_head is not None and "reward_head" in state:
+            self._reward_head.load_state_dict(state["reward_head"], strict=strict)
+
+        if self._continue_network is not None and "continue_network" in state:
+            self._continue_network.load_state_dict(
+                state["continue_network"], strict=strict
+            )
+        if self._continue_head is not None and "continue_head" in state:
+            self._continue_head.load_state_dict(state["continue_head"], strict=strict)
+
     def imagine_sequence(
         self,
         starting_deter: torch.Tensor,

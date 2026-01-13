@@ -1,5 +1,7 @@
 from typing import Tuple, List, Optional, Dict
 import time
+import os
+from pathlib import Path
 import torch
 import numpy as np
 import wandb
@@ -83,7 +85,9 @@ class Dreamer:
         self._actor_loss = 0.0
         self._critic_loss = 0.0
 
-        self._total_env_training_steps = 0
+        if self._config.load_existing:
+            self.load_checkpoint(self._config.load_existing_path)
+        self._total_env_training_steps = len(self._replay_buffer)
         self._episode_id = 0
 
         self._train_first_step = True
@@ -386,6 +390,10 @@ class Dreamer:
                 self.step_environment_eval(self._config.n_eval_episodes)
             if self._total_env_training_steps % self._config.log_every == 0:
                 self._train_log()
+            if self._total_env_training_steps % self._config.save_every == 0:
+                self.save_checkpoint(
+                    self._config.weights_dir, self._total_env_training_steps
+                )
             if self._train_done:
                 reward = 0.0
                 self._train_obs, info = self._train_env.reset()
@@ -536,9 +544,11 @@ class Dreamer:
         Main training loop.
         """
         self._fps = 0.0
-        self.step_environment_train(
-            random_actions=True, n_steps=self._config.prefill_steps
-        )
+        if len(self._replay_buffer) < self._config.prefill_steps:
+            self.step_environment_train(
+                random_actions=True,
+                n_steps=self._config.prefill_steps - len(self._replay_buffer),
+            )
         self._train_done = True
         model_steps_per_batch = self._config.batch_size * self._config.batch_length
 
@@ -578,3 +588,48 @@ class Dreamer:
                 )
             end_time = time.perf_counter()
             self._fps = env_steps_per_model_batch / (end_time - start_time)
+
+    def save_checkpoint(self, path: str, step: Optional[int] = None) -> None:
+        """
+        Save world model, behaviour, optimisers, and training metadata.
+
+        Args:
+            path: Directory path to save checkpoint.
+            step: Optional step number (used for naming).
+        """
+        path_lib_path = Path(path)
+        path_lib_path.mkdir(parents=True, exist_ok=True)
+
+        if step is None:
+            step = self._total_env_training_steps
+
+        checkpoint = {
+            "step": step,
+            "episode_id": self._episode_id,
+            "world_model": self._world_model.state_dict(),
+            "behaviour": self._behaviour.state_dict(),
+            "wm_optim": self._wm_optim.state_dict(),
+            "behaviour_optim": self._behaviour_optim.state_dict(),
+            "config": OmegaConf.to_container(self._config),
+        }
+
+        if self._config.checkpoint:
+            path_lib_path = path_lib_path / f"checkpoint_{step}.pt"
+        else:
+            path_lib_path = path_lib_path / "latest.pt"
+
+        torch.save(checkpoint, path_lib_path)
+        print(f"[Dreamer] Saved checkpoint to {path_lib_path}")
+
+    def load_checkpoint(self, path: str, map_location=None) -> None:
+        checkpoint = torch.load(path, map_location=map_location or self._device)
+
+        self._world_model.load_state_dict(checkpoint["world_model"])
+        self._behaviour.load_state_dict(checkpoint["behaviour"])
+        self._wm_optim.load_state_dict(checkpoint["wm_optim"])
+        self._behaviour_optim.load_state_dict(checkpoint["behaviour_optim"])
+
+        self._total_env_training_steps = checkpoint["step"]
+        self._episode_id = checkpoint["episode_id"]
+
+        print(f"[Dreamer] Loaded checkpoint from {path}")
