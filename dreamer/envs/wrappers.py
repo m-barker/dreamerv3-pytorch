@@ -14,11 +14,8 @@ class UnscaleAction(gym.ActionWrapper):
     def __init__(self, env: gym.Env, min_scaled: float = -1.0, max_scaled: float = 1.0):
         super().__init__(env)
 
-        if isinstance(env.action_space, spaces.Box):
-            self._env_low = env.action_space.low
-            self._env_high = env.action_space.high
-        else:
-            raise ValueError("Action space must be a Box to unscale")
+        self._env_low = env.action_space.low
+        self._env_high = env.action_space.high
 
         self._min_scaled = min_scaled
         self._max_scaled = max_scaled
