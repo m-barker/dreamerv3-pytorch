@@ -2,6 +2,7 @@ from typing import Tuple, Dict, Optional, Union
 
 import torch
 import gymnasium as gym
+from gymnasium.wrappers import RescaleAction, ClipAction
 import numpy as np
 import shimmy  # import needed to trigger the registrations of dm environments
 
@@ -39,6 +40,8 @@ class DMCWrapper:
         self._return_high_res_image = return_high_res_img
 
         self._env = gym.make(f"dm_control/{self._task_name}", render_mode="rgb_array")
+        self._env = RescaleAction(self._env, min_action=-1.0, max_action=1.0)
+        self._env = ClipAction(self._env)
         self._step_count = 0
         self._max_steps = max_steps
 
@@ -47,7 +50,7 @@ class DMCWrapper:
         # H,W,C
         image_size = self._image_res + (3,)
         return gym.spaces.Dict(
-            {"image": gym.spaces.Box(0, 255, image_size, dtype=np.unit8)}
+            {"image": gym.spaces.Box(0, 255, image_size, dtype=np.uint8)}
         )
 
     @property
@@ -86,9 +89,13 @@ class DMCWrapper:
         Args:
             action
         """
-        assert (
-            action.shape == self._env.action_space.shape
-        ), f"Given action shape {action.shape} does not match required environment shape: {self._env.action_space.shape}"
+        # Try to squeeze off any singular batch dimensions
+        if action.shape != self._env.action_space.shape:
+            action = action.squeeze()
+
+        assert action.shape == self._env.action_space.shape, (
+            f"Given action shape {action.shape} does not match required environment shape: {self._env.action_space.shape}"
+        )
         if isinstance(action, torch.Tensor):
             action = action.detach().cpu().numpy()
 

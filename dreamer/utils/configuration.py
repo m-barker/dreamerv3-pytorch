@@ -1,6 +1,7 @@
 from omegaconf import DictConfig
 
 from dreamer.envs.minigrid_wrapper import MiniGridFullObsWrapper
+from dreamer.envs.dmc import DMCWrapper
 
 
 def configure_environments(cfg: DictConfig):
@@ -16,6 +17,18 @@ def configure_environments(cfg: DictConfig):
             seed=cfg.seed,
             max_steps=cfg.env.max_steps,
             image_res=cfg.env.image_res,
+        )
+    elif cfg.env.suite_name == "dmc":
+        train_env = DMCWrapper(
+            task_name=cfg.env.task_name,
+            image_res=cfg.env.image_res,
+            seed=cfg.seed,
+        )
+        eval_env = DMCWrapper(
+            task_name=cfg.env.task_name,
+            image_res=cfg.env.image_res,
+            seed=cfg.seed,
+            return_high_res_img=True,
         )
     else:
         raise ValueError("Unhandled environment in config")

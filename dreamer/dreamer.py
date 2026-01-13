@@ -64,6 +64,9 @@ class Dreamer:
             if len(action_sample.shape) == 2:
                 self._n_actions = action_sample.shape[0]
                 self._action_dim = action_sample.shape[1]
+            else:
+                self._n_actions = 1
+                self._action_dim = action_sample.shape[0]
 
         self._device = torch.device(self._config.device)
 
@@ -304,6 +307,7 @@ class Dreamer:
                 tensor_obs = {
                     k: torch.tensor(v).unsqueeze(0).to(self._device)
                     for k, v in self._train_obs.items()
+                    if k in self._keys_to_store
                 }
                 deter, stoch = self._world_model.get_posterior(
                     tensor_obs,
@@ -390,6 +394,7 @@ class Dreamer:
                 tensor_obs = {
                     k: torch.tensor(v).unsqueeze(0).to(self._device)
                     for k, v in obs.items()
+                    if k in self._keys_to_store
                 }
                 deter, stoch = self._world_model.get_posterior(
                     tensor_obs,
