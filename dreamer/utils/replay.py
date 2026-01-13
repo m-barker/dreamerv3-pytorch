@@ -1,4 +1,5 @@
 from typing import List, Dict, Optional
+import os
 import random
 
 import torch
@@ -39,6 +40,8 @@ class Buffer:
 
         if load_existing:
             self._buffer.loads(disk_path)
+
+        os.makedirs(disk_path, exist_ok=True)
 
         self._disk_path = disk_path
         self._save_every = save_every
