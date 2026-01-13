@@ -33,6 +33,6 @@ class UnscaleAction(gym.ActionWrapper):
         """
         action = np.asarray(action, dtype=np.float32)
         unscaled_action = (action - self._min_scaled) * (
-            (self._env_high - self._env_low) / self._max_scaled - self._min_scaled
+            (self._env_high - self._env_low) / (self._max_scaled - self._min_scaled)
         ) + self._env_low
         return np.clip(unscaled_action, self._env_low, self._env_high)
