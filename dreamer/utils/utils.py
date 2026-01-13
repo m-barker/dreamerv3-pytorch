@@ -2,6 +2,7 @@ from typing import Tuple
 from dataclasses import fields
 
 import numpy as np
+import random
 import torch
 import cv2
 
@@ -31,6 +32,12 @@ class PercentNorm:
         scale = torch.clip(ema_vals[1] - ema_vals[0], min=self._limit)
         offset = ema_vals[0]
         return offset.detach(), scale.detach()
+
+
+def set_seed_everywhere(seed: int) -> None:
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
 
 
 def combine_det_and_stoch(deter: torch.Tensor, stoch: torch.Tensor) -> torch.Tensor:

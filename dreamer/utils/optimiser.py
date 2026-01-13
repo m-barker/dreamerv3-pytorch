@@ -17,7 +17,6 @@ class SimpleDreamerOptimizer:
         use_amp=False,
     ):
         self.parameters = list(parameters)
-        print(f"Total parameters: {sum(p.numel() for p in parameters)}")
         self.optimizer = torch.optim.AdamW(
             self.parameters,
             lr=lr,

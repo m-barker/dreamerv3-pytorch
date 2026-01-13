@@ -121,7 +121,7 @@ class Buffer:
         batch_size: int,
         batch_length: int,
         device: Optional[torch.device] = None,
-    ) -> torch.Tensor:
+    ) -> Dict[str, torch.Tensor]:
         """
         Samples a batch of sequential transitions from the replay buffer.
 

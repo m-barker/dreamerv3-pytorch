@@ -38,13 +38,16 @@ class Behaviour(nn.Module):
         critic_params: CriticParams,
         training_params: BehaviourTrainingParams,
         device: Optional[torch.device] = None,
+        compile: bool = False,
     ) -> None:
         super().__init__()
         self._device = device if device is not None else torch.device("cpu")
         self._actor = Actor(**asdict_shallow(actor_params)).to(self._device)
-        self._actor = torch.compile(self._actor)
+        if compile:
+            self._actor = torch.compile(self._actor)
         self._critic = Critic(**asdict_shallow(critic_params)).to(self._device)
-        self._critic = torch.compile(self._critic)
+        if compile:
+            self._critic = torch.compile(self._critic)
         self._training_params = training_params
 
         self._slow_val_target = None
@@ -53,7 +56,8 @@ class Behaviour(nn.Module):
             self._slow_val_target = Critic(**asdict_shallow(critic_params)).to(
                 self._device
             )
-            self._slow_val_target = torch.compile(self._slow_val_target)
+            if compile:
+                self._slow_val_target = torch.compile(self._slow_val_target)
 
         self._ret_norm = None
         if self._training_params.ret_norm:
@@ -184,6 +188,7 @@ class Behaviour(nn.Module):
         else:
             with torch.no_grad():
                 imagined_reward = world_model.predict_reward(imagined_latents)
+                
 
         if continue_func is not None:
             imagined_cont = continue_func(imagined_latents)

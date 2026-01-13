@@ -1,0 +1,38 @@
+from omegaconf import DictConfig
+
+from dreamer.envs.minigrid_wrapper import MiniGridFullObsWrapper
+
+
+def configure_environments(cfg: DictConfig):
+    if cfg.env.suite_name == "minigrid":
+        train_env = MiniGridFullObsWrapper(
+            task_name=cfg.env.task_name,
+            seed=cfg.seed,
+            max_steps=cfg.env.max_steps,
+            image_res=cfg.env.image_res,
+        )
+        eval_env = MiniGridFullObsWrapper(
+            task_name=cfg.env.task_name,
+            seed=cfg.seed,
+            max_steps=cfg.env.max_steps,
+            image_res=cfg.env.image_res,
+        )
+    else:
+        raise ValueError("Unhandled environment in config")
+    return train_env, eval_env
+
+
+def configure_buffer(cfg: DictConfig):
+    pass
+
+
+def configure_logger(cfg: DictConfig):
+    pass
+
+
+def configure_wm(cfg: DictConfig):
+    pass
+
+
+def configure_behaviour(cfg: DictConfig):
+    pass

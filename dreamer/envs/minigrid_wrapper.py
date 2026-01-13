@@ -1,5 +1,6 @@
 from typing import Tuple, Dict, Optional, Union
 
+from gymnasium.spaces.discrete import Discrete
 import torch
 import gymnasium as gym
 import numpy as np
@@ -58,11 +59,12 @@ class MiniGridFullObsWrapper:
     def _process_obs(self, obs: Dict) -> Dict:
         # The RGBImgObsWrapper already provides pixels in obs["image"]
         image_obs = obs["image"]
+        high_res_obs = obs["image"]
 
         if image_obs.shape[:-1] != self._image_res:
             image_obs = resize_image(image_obs, self._image_res)
 
-        return {"image": image_obs}
+        return {"image": image_obs, "high_res_image": high_res_obs}
 
     def reset(self) -> Tuple[Dict, Dict]:
         obs, info = self._env.reset(seed=self._seed)

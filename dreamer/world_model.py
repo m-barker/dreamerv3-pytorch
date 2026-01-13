@@ -46,6 +46,7 @@ class WorldModel:
         reward_params: Optional[MLPandHeadParams] = None,
         continue_params: Optional[MLPandHeadParams] = None,
         device: Optional[torch.device] = None,
+        compile: bool = False,
     ) -> None:
         self._training_params = training_params
         self._device = device
@@ -55,9 +56,11 @@ class WorldModel:
 
         self._rssm = RSSM(**asdict(rssm_params))
         self._encoder = Encoder(**asdict_shallow(encoder_params)).to(self._device)
-        # self._encoder = torch.compile(self._encoder)
+        if compile:
+            self._encoder = torch.compile(self._encoder)
         self._decoder = Decoder(**asdict_shallow(decoder_params)).to(self._device)
-        # self._decoder = torch.compile(self._decoder)
+        if compile:
+            self._decoder = torch.compile(self._decoder)
 
         self._reward_network = None
         self._reward_head = None
@@ -69,23 +72,24 @@ class WorldModel:
             self._reward_network = MLP(**asdict(reward_params.mlp_params)).to(
                 self._device
             )
-            # self._reward_network = torch.compile(self._reward_network)
+            if compile:
+                self._reward_network = torch.compile(self._reward_network)
             self._reward_head = MLPDistHead(reward_params.head_params).to(self._device)
         if continue_params is not None:
             self._continue_network = MLP(**asdict(continue_params.mlp_params)).to(
                 self._device
             )
-            # self._continue_network = torch.compile(self._continue_network)
+            if compile:
+                self._continue_network = torch.compile(self._continue_network)
             self._continue_head = MLPDistHead(continue_params.head_params).to(
                 self._device
             )
-            # self._continue_head = torch.compile(self._continue_head)
 
         valid_grad_components = ("encoder", "decoder", "reward", "continue")
         for component in grad_components:
-            assert (
-                component in valid_grad_components
-            ), f"Invalid grad component {component}"
+            assert component in valid_grad_components, (
+                f"Invalid grad component {component}"
+            )
         self._grad_components = grad_components
 
     def get_parameters(self) -> List[nn.Parameter]:
@@ -213,9 +217,9 @@ class WorldModel:
         if len(latent_states.shape) == 3:
             B, T, D = latent_states.shape
         else:
-            assert (
-                len(latent_states.shape) == 2
-            ), f"Invalid number of dimensions of latent states: {latent_states.shape}"
+            assert len(latent_states.shape) == 2, (
+                f"Invalid number of dimensions of latent states: {latent_states.shape}"
+            )
             B, D = latent_states.shape
             T = None
         if T is not None:
@@ -243,9 +247,9 @@ class WorldModel:
         if len(latent_states.shape) == 3:
             B, T, D = latent_states.shape
         else:
-            assert (
-                len(latent_states.shape) == 2
-            ), f"Invalid number of dimensions of latent states: {latent_states.shape}"
+            assert len(latent_states.shape) == 2, (
+                f"Invalid number of dimensions of latent states: {latent_states.shape}"
+            )
             B, D = latent_states.shape
             T = None
         if T is not None:
@@ -296,7 +300,7 @@ class WorldModel:
 
     def train(
         self, data: Dict[str, torch.Tensor]
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         Args:
             data [Dict[str, torch.Tensor]]: pre-processed replay

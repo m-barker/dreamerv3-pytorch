@@ -1,18 +1,15 @@
-# Constants across all model sizes
-
-###### MODEL ARCHITECTURE #######
 rssm:
   deter_size: ${deter_size}
   n_stoch_dists: 32
   n_stoch_cats: ${n_stoch_cats}
   encoded_size: ${encoder_embed_dim}
   hidden_size: ${hidden_size}
-  act_func: "SiLU"
+  act_func: SiLU
   n_prior_layers: 2
   n_post_layers: 1
   n_deter_layers: 1
-  layer_norm: True
-  bias: True
+  layer_norm: true
+  bias: true
   unimix: 0.01
   winit_scale: 1.0
   n_blocks: 8
@@ -21,68 +18,56 @@ cnn_encoder:
   kernel_size: 5
   stride: 1
   min_res: 4
-  bias: True
-  norm: True
-  act_func: "SiLU"
-  max_pool: True
-  depth_mult: [2,3,4,4]
+  bias: true
+  norm: true
+  act_func: SiLU
+  max_pool: true
+  depth_mult:
+  - 2
+  - 3
+  - 4
+  - 4
   max_pool_stride: 2
   max_pool_kernel: 2
-mlp_encoder:
-  input_dim: 1 # This is handled dynamically based on the obs space
-  out_dim: ${hidden_size}
-  n_layers: 3
-  layer_width: ${hidden_size}
-  act_func: "SiLU"
-  layer_norm: True
-  bias: True
-  winit_scale: 1.0
-  final_layer: False
 cnn_decoder:
   latent_dim: ${latent_dim}
   starting_depth: ${cnn_encoder.initial_depth}
   starting_res: 4
   kernel_size: 5
-  depth_mults: [2,3,4,4]
-  bias: True
-  norm: True
-  act_func: "SiLU"
-  final_sigmoid: True
-mlp_decoder:
-  input_dim: ${latent_dim}
-  out_dim: 1 # Set dynamically dependent on observation space
-  n_layers: 3
-  layer_width: ${hidden_size}
-  act_func: "SiLU"
-  layer_norm: True
-  bias: True
-  winit_scale: 1.0
-  final_layer: True
+  depth_mults:
+  - 2
+  - 3
+  - 4
+  - 4
+  bias: true
+  norm: true
+  act_func: SiLU
+  final_sigmoid: true
 reward_head:
   n_bins: 255
   min_bin_val: -20.0
   max_bin_val: 20.0
-  symexp_bins: True
+  symexp_bins: true
 reward_mlp:
   input_dim: ${latent_dim}
   layer_width: ${hidden_size}
   out_dim: ${reward_head.n_bins}
   n_layers: 1
-  act_func: "SiLU"
-  layer_norm: True
-  bias: True
+  act_func: SiLU
+  layer_norm: true
+  bias: true
   winit_scale: 0.0
 continue_mlp:
   input_dim: ${latent_dim}
   layer_width: ${hidden_size}
   out_dim: 1
   n_layers: 1
-  act_func: "SiLU"
-  layer_norm: True
-  bias: True
+  act_func: SiLU
+  layer_norm: true
+  bias: true
   winit_scale: 1.0
 actor_discrete_head:
-  unimix_ratio: 0.01
+  unimix: 0.01
 actor_cont_head:
   min_std: 0.1
   max_std: 1.0
@@ -90,25 +75,28 @@ actor:
   latent_state_size: ${latent_dim}
   layer_width: ${hidden_size}
   n_layers: 3
-  act_func: "SiLU"
-  layer_norm: True
-  bias: True
+  act_func: SiLU
+  layer_norm: true
+  bias: true
   winit_scale: 0.01
 critic_head:
   n_bins: 255
   min_bin_val: -20.0
   max_bin_val: 20.0
-  symexp_bins: True
+  symexp_bins: true
 critic:
   latent_state_size: ${latent_dim}
   layer_width: ${hidden_size}
   n_layers: 3
-  act_func: "SiLU"
-  layer_norm: True
-  bias: True
+  act_func: SiLU
+  layer_norm: true
+  bias: true
   winit_scale: 0.0
-##### MODEL TRAINING HYPER-PARAMETERS ###########
-world_model_grad_components: ["encoder", "decoder", "reward", "continue"]
+world_model_grad_components:
+- encoder
+- decoder
+- reward
+- continue
 imag_horizon: 15
 world_model_training:
   decoder_loss_scale: 1.0
@@ -121,26 +109,47 @@ world_model_training:
 behaviour_training:
   lam: 0.95
   imag_horizon: ${imag_horizon}
-  ret_norm: True
+  ret_norm: true
   ret_norm_min: 0.05
   ret_norm_max: 0.95
   ret_norm_limit: 1.0
   ret_norm_rate: 0.01
-  ent_weight: 3e-4
-  slow_val: True
+  ent_weight: 0.0003
+  slow_val: true
   slow_reg: 1.0
-  slow_target_update: 1
+  slow_target_udpate: 1
   slow_target_frac: 0.02
-##### MODEL OPTIMISERS ###############
 world_model_optim:
-  lr: 4e-5
+  lr: 4.0e-05
   weight_decay: 0.0
   grad_clip: 1000.0
-  use_amp: False
+  use_amp: false
 behaviour_optim:
-  lr: 4e-5
+  lr: 4.0e-05
   weight_decay: 0.0
   grad_clip: 100.0
-  use_amp: False
-
-
+  use_amp: false
+hidden_size: 256
+encoder_init_depth: 16
+deter_size: 2048
+n_stoch_cats: 16
+latent_dim: 2560
+env:
+  task_name: MiniGrid-Empty-5x5-v0
+  image_res: (64,64)
+  max_steps: 100
+  seed: ${seed}
+seed: 42
+device: cuda
+total_steps: 1000000.0
+batch_size: 16
+batch_length: 64
+compile: true
+eval_every: 10000
+save_every: 50000
+log_every: 5000
+checkpoint: false
+replay:
+  capacity: 1000000.0
+  disk_path: ./storage/replay_buffer/
+  load_existing: false

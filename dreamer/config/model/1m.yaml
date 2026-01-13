@@ -5,6 +5,7 @@ defaults:
 # 1M model parameters
 hidden_size: 64
 encoder_init_depth: 16
+encoder_embed_dim: 1024
 deter_size: 512
 n_stoch_cats: 4
 latent_dim: 640

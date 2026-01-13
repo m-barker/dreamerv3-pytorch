@@ -4,20 +4,25 @@ defaults:
   - _self_
 
 # Experiment Settings
-seed: 42
+seed: 4
 device: "cuda"
 total_steps: 1e6
 batch_size: 16
 batch_length: 64
 compile: True
 eval_every: 10000
+n_eval_episodes: 10
 save_every: 50000
-log_every: 5000
+log_every: 500
+prefill_steps: 2500
 # Whether to save a new set of weights every time, or overwrite
 checkpoint: False
+wandb: True
+wandb_project: "dreamerv3-pytorch"
 
 replay:
   capacity: 1e6
   disk_path: "./storage/replay_buffer/"
   load_existing: False
+  save_every: ${save_every}
 

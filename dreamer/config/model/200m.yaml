@@ -5,6 +5,7 @@ defaults:
 # 200M model parameters
 hidden_size: 1024
 encoder_init_depth: 64
+encoder_embed_dim: 4096
 deter_size: 8192
 n_stoch_cats: 64
 latent_dim: 10240

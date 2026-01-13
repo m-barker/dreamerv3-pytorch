@@ -26,6 +26,7 @@ class MLPParams:
     layer_norm: bool
     bias: bool
     winit_scale: float = 1.0
+    final_layer: bool = True
 
 
 @dataclass
@@ -200,6 +201,7 @@ class MLP(nn.Module):
         layer_norm: bool,
         bias: bool,
         winit_scale: float = 1.0,
+        final_layer: bool = True,
     ) -> None:
         """
         Args:
@@ -223,6 +225,9 @@ class MLP(nn.Module):
             winit_scale (float): amount to scale the winit by. Especially useful
             for when wanting to zero the weights for reward and value heads.
 
+            final_layer (bool): whether to add a final layer that doesn't have
+            an activation function or norm (i.e., logits). Defaults to True.
+
 
         """
         super().__init__()
@@ -235,6 +240,7 @@ class MLP(nn.Module):
         self._layer_norm = layer_norm
         self._winit_scale = winit_scale
         self._bias = bias
+        self._final_layer = final_layer
 
         self._network = self._build_network()
         # Have to use a lambda to pass the winit_scale arg in
@@ -268,9 +274,10 @@ class MLP(nn.Module):
                 layers.append(RMSNormWrapper([self._layer_width]))
             layers.append(act_func())
 
-        final_in = self._layer_width
-        # Final layer has no activation or layer norm, as it is the logits
-        layers.append(nn.Linear(final_in, self._out_dim, bias=self._bias))
+        if self._final_layer:
+            final_in = self._layer_width
+            # Final layer has no activation or layer norm, as it is the logits
+            layers.append(nn.Linear(final_in, self._out_dim, bias=self._bias))
 
         return nn.Sequential(*layers)
 

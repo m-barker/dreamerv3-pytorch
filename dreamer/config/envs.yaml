@@ -1,6 +1,0 @@
-# MiniGrid-specific parameters
-minigrid:
-  task_name: "MiniGrid-Empty-5x5-v0"
-  image_res: (64,64)
-  max_steps: 100
-  seed: ${seed}

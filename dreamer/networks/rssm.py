@@ -28,6 +28,7 @@ class RSSMParams:
     n_blocks: int  # n_blocks in block GRU
     action_dim: int  # total flattened action dim
     device: Optional[torch.device] = None
+    compile: bool = False
 
 
 class DeterministicModule(nn.Module):
@@ -205,6 +206,7 @@ class RSSM:
         n_blocks: int,
         action_dim: int,
         device: Optional[torch.device] = None,
+        compile: bool = False,
     ) -> None:
         """
         Args:
@@ -246,6 +248,8 @@ class RSSM:
 
             device (torch.device, optional): device to put tensors on. If None,
             defaults to CPU. Defaults to None.
+
+            compile (bool, optional): whether to compile the module. Defaults to False
         """
         self._deter_size = deter_size
         self._n_stoch_dists = n_stoch_dists
@@ -283,16 +287,19 @@ class RSSM:
             self._winit_scale,
             self._act_func_name,
         ).to(device)
-        self._block_gru = torch.compile(self._block_gru)
+        if compile:
+            self._block_gru = torch.compile(self._block_gru)
 
         self._prior_logit_network = (
             self._build_prior_network().apply(truncated_normal_weight_init).to(device)
         )
-        self._prior_logit_network = torch.compile(self._prior_logit_network)
+        if compile:
+            self._prior_logit_network = torch.compile(self._prior_logit_network)
         self._post_logit_network = (
             self._build_post_network().apply(truncated_normal_weight_init).to(device)
         )
-        self._post_logit_network = torch.compile(self._post_logit_network)
+        if compile:
+            self._post_logit_network = torch.compile(self._post_logit_network)
 
     def parameters(self) -> List[nn.Parameter]:
         params = []
@@ -431,7 +438,7 @@ class RSSM:
         if len(is_first.shape) == 1:
             is_first = is_first.unsqueeze(-1)
 
-        return data * (~is_first)
+        return data * (1.0 - is_first)
 
     def observe_sequence(
         self,
@@ -507,9 +514,9 @@ class RSSM:
             is_first (torch.Tensor): mask for if current state is the first in a trajectory.
             of shape (B, 1)
         """
-        assert (prev_deter is None) == (prev_post is None), (
-            "prev_deter and prev_post must either both be None or both not None"
-        )
+        assert (prev_deter is None) == (
+            prev_post is None
+        ), "prev_deter and prev_post must either both be None or both not None"
         # Don't need the or, but needed to make Pyright behave.
         if prev_deter is None or prev_post is None:
             prev_deter, prev_post = self._get_initial_state(prev_action.shape[0])
@@ -620,9 +627,9 @@ class RSSM:
                 latent = combine_det_and_stoch(prev_deter, prev_stoch)
                 prev_action = policy(latent.detach())
             elif actions is not None:
-                assert actions.shape[1] == length, (
-                    f"Invalid number of actions given: {actions.shape}"
-                )
+                assert (
+                    actions.shape[1] == length
+                ), f"Invalid number of actions given: {actions.shape}"
                 prev_action = actions[:, t]
             else:
                 raise ValueError(
