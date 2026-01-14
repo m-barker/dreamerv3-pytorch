@@ -72,6 +72,11 @@ class Dreamer:
                 self._action_dim = action_sample.shape[0]
 
         self._device = torch.device(self._config.device)
+        self._action_repeat = 1
+
+        # By default, all Atari envs have an action repeat of 4
+        if self._config.env.suite_name == "atari":
+            self._action_repeat = 4
 
         self._keys_to_store = []
         self._replay_buffer = self._configure_buffer()
@@ -87,7 +92,7 @@ class Dreamer:
 
         if self._config.load_existing:
             self.load_checkpoint(self._config.load_existing_path)
-        self._total_env_training_steps = len(self._replay_buffer)
+        self._total_env_training_steps = len(self._replay_buffer) * self._action_repeat
         self._episode_id = 0
 
         self._train_first_step = True
@@ -463,7 +468,7 @@ class Dreamer:
                 )
                 self._train_first_step = False
 
-            self._total_env_training_steps += 1
+            self._total_env_training_steps += 1 * self._action_repeat
             transition = {
                 "prev_action": self._train_prev_action,
                 "reward": reward,
@@ -587,7 +592,11 @@ class Dreamer:
                     random_actions=False, n_steps=env_steps_per_model_batch
                 )
             end_time = time.perf_counter()
-            self._fps = env_steps_per_model_batch / (end_time - start_time)
+            self._fps = (
+                env_steps_per_model_batch
+                * self._action_repeat
+                / (end_time - start_time)
+            )
 
     def save_checkpoint(self, path: str, step: Optional[int] = None) -> None:
         """
