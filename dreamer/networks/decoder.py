@@ -12,6 +12,7 @@ from .shared import (
     MLP,
     MLPParams,
     RMSNormWrapper,
+    BlockLinearLayer,
     truncated_normal_weight_init,
 )
 
@@ -19,7 +20,10 @@ from .shared import (
 @dataclass
 class DecoderCNNParams:
     starting_res: int
-    latent_dim: int
+    deter_dim: int
+    n_stoch_dists: int
+    n_stoch_cats: int
+    hidden_dim: int
     kernel_size: int
     starting_depth: int
     depth_mults: Tuple[int, ...]
@@ -27,6 +31,7 @@ class DecoderCNNParams:
     norm: bool
     act_func: str
     final_sigmoid: bool
+    n_blocks: int
     image_shape: Tuple[int, int, int] = (64, 64, 3)
 
 
@@ -100,12 +105,17 @@ class Decoder(nn.Module):
         self._symlog_vecs = symlog_vecs
 
     def forward(
-        self, latent_states: torch.Tensor
+        self,
+        deter: torch.Tensor,
+        stoch: torch.Tensor,
     ) -> Dict[str, Union[MSEDist, SymlogDist]]:
         """
         Args:
-            latent_states (torch.Tensor) latent states of shape (B, T, D) or
+            deter (torch.Tensor) deterministic latent states of shape (B, T, D) or
             (B, D)
+
+            stoch (torch.Tensor): stochastic latent states of shape (B, T, D, C) or
+            (B, D, C)
 
         Returns:
             Dict[str, torch.Tensor] dictionary of decoded observations, where
@@ -115,17 +125,21 @@ class Decoder(nn.Module):
         """
 
         T = None
-        if len(latent_states.shape) == 2:
-            B, _ = latent_states.shape
-        elif len(latent_states.shape) == 3:
-            B, T, _ = latent_states.shape
+        if len(deter.shape) == 2:
+            B, _ = deter.shape
+        elif len(deter.shape) == 3:
+            B, T, _ = deter.shape
         else:
-            raise ValueError(f"Invalid latent state shape, of {latent_states.shape}")
+            raise ValueError(f"Invalid latent state shape, of {deter.shape}")
 
         if T is not None:
-            latent_states = latent_states.reshape((B * T, -1))
+            deter = deter.reshape((B * T, -1))
+            stoch = stoch.reshape((B * T, -1))
+        else:
+            stoch = stoch.reshape((B, -1))
+        latent_states = torch.concatenate([deter, stoch], dim=-1)
 
-        decoded_imgs = self._cnn_decoder(latent_states)
+        decoded_imgs = self._cnn_decoder(deter, stoch)
         if T is not None:
             H, W, C = decoded_imgs.shape[1:]
             decoded_imgs = decoded_imgs.reshape((B, T, H, W, C))
@@ -180,7 +194,9 @@ class RepeatLayer(nn.Module):
         Args:
             x (torch.Tensor): shape (B, C, H, W)
         """
-        return F.interpolate(x, scale_factor=2, mode="nearest")
+        x = x.repeat_interleave(2, dim=2)  # double H
+        x = x.repeat_interleave(2, dim=3)  # double W
+        return x
 
 
 class CNNDecoder(nn.Module):
@@ -195,7 +211,10 @@ class CNNDecoder(nn.Module):
         self,
         image_shape: Tuple[int, int, int],
         starting_res: int,
-        latent_dim: int,
+        deter_dim: int,
+        n_stoch_dists: int,
+        n_stoch_cats: int,
+        hidden_dim: int,
         kernel_size: int,
         starting_depth: int,
         depth_mults: Tuple[int, ...],
@@ -203,6 +222,7 @@ class CNNDecoder(nn.Module):
         norm: bool,
         act_func: str,
         final_sigmoid: bool,
+        n_blocks: int,
     ) -> None:
         """
         Args:
@@ -231,6 +251,9 @@ class CNNDecoder(nn.Module):
             final_sigmoid (bool): whether the final layer should be passed
             through a sigmoid function.
 
+            n_blocks (int): Number of blocks for processing the block
+            linear layer that processes the deterministic latent state
+
         """
         super().__init__()
 
@@ -241,8 +264,11 @@ class CNNDecoder(nn.Module):
 
         self._image_shape = image_shape
         self._starting_res = starting_res
-        self._latent_dim = latent_dim
+        self._deter_dim = deter_dim
+        self._n_stoch_dists = n_stoch_dists
+        self._n_stoch_cats = n_stoch_cats
         self._kernel_size = kernel_size
+        self._hidden_dim = hidden_dim
         # Reverse this, as want to reverse the CNN encoder
         # Drop the last one, as we want the final CNN to have a
         # depth equal to the number of image channels.
@@ -253,15 +279,41 @@ class CNNDecoder(nn.Module):
         self._norm = norm
         self._act_func = act_func
         self._final_sigmoid = final_sigmoid
+        self._n_blocks = n_blocks
 
         self._cnn_network = self._configure_cnn_network()
-        self._linear_layer = nn.Linear(
-            self._latent_dim,
-            self._starting_depth * self._starting_res * self._starting_res,
-            bias=bias,
+
+        self._spacial_init_dim = (
+            self._starting_res * self._starting_res * self._starting_depth
         )
+
+        self._block_deter = BlockLinearLayer(
+            input_dim=self._deter_dim,
+            output_dim=self._spacial_init_dim,
+            n_blocks=self._n_blocks,
+            bias=self._bias,
+            layer_norm=False,
+            act_func=None,
+        )
+
+        self._stoch_1 = nn.Linear(
+            self._n_stoch_cats * self._n_stoch_dists,
+            2 * self._hidden_dim,
+            bias=self._bias,
+        )
+        self._stoch_norm = RMSNormWrapper(2 * self._hidden_dim)
+        self._stoch_2 = nn.Linear(
+            2 * self._hidden_dim,
+            self._spacial_init_dim,
+            bias=self._bias,
+        )
+
+        truncated_normal_weight_init(self._stoch_1)
+        truncated_normal_weight_init(self._stoch_2)
+
+        self._sp_norm = RMSNormWrapper(self._spacial_init_dim)
+
         self._cnn_network.apply(truncated_normal_weight_init)
-        self._linear_layer.apply(truncated_normal_weight_init)
 
     def _configure_cnn_network(self) -> nn.Sequential:
         layers = []
@@ -306,13 +358,24 @@ class CNNDecoder(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, latent_state: torch.Tensor) -> torch.Tensor:
+    def forward(self, deter: torch.Tensor, stoch: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            latent_state (torch.Tensor): shape (B,  D)
+            deter (torch.Tensor): shape (B,  D)
+
+            stoch (torch.Tensor): shape (B, n_stoch_dists * n_stoch_classes)
         """
-        B, _ = latent_state.shape
-        x = self._linear_layer(latent_state)
+        B, _ = deter.shape
+
+        x0 = self._block_deter(deter)
+        x1 = self._stoch_1(stoch)
+        x1 = self._stoch_norm(x1)
+        x1 = getattr(nn, self._act_func)()(x1)
+        x1 = self._stoch_2(x1)
+
+        x = self._sp_norm(x0 + x1)
+        x = getattr(nn, self._act_func)()(x)
+
         x = x.reshape((B, self._starting_depth, self._starting_res, self._starting_res))
         decoded_images = self._cnn_network(x)
 

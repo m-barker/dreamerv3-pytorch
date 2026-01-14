@@ -310,7 +310,9 @@ class Dreamer:
             imagined_latents = combine_det_and_stoch(out["deter"], out["prior_sample"])
 
             # All are numpy arrays of shape (H+1, ...)
-            decoded_images = self._world_model.decode_images(imagined_latents)
+            decoded_images = self._world_model.decode_images(
+                out["deter"], out["prior_sample"]
+            )
             imagined_reward = (
                 self._world_model.predict_reward(imagined_latents)
                 .squeeze()
