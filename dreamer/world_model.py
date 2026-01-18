@@ -169,9 +169,11 @@ class WorldModel:
         post_dist = torchd.independent.Independent(post_dist, 1)
         prior_dist = torchd.independent.Independent(prior_dist, 1)
 
-        dynamics_loss = kl_divergence(post_dist, prior_dist)
+        dynamics_loss = kl_divergence(post_dist, prior_dist)  # (B, T)
+        dynamics_loss = dynamics_loss.sum(dim=1)  # sum over T
         dynamics_loss = torch.clip(dynamics_loss, min=self._training_params.free_nats)
-        dynamics_loss = dynamics_loss.mean()
+        dynamics_loss = dynamics_loss.mean(dim=0)
+
         dynamics_loss *= self._training_params.dynamics_loss_scale
 
         loss_dict["dynamics"] = dynamics_loss
@@ -182,8 +184,9 @@ class WorldModel:
         prior_dist = torchd.independent.Independent(prior_dist, 1)
 
         rep_loss = kl_divergence(post_dist, prior_dist)
+        rep_loss = rep_loss.sum(dim=1)
         rep_loss = torch.clip(rep_loss, min=self._training_params.free_nats)
-        rep_loss = rep_loss.mean()
+        rep_loss = rep_loss.mean(dim=0)
         rep_loss *= self._training_params.representation_loss_scale
 
         loss_dict["representation"] = rep_loss
