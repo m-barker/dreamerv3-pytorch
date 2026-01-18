@@ -61,9 +61,9 @@ class Dreamer:
             self._n_actions = 1
         else:
             action_sample = self._train_env.action_space.sample()
-            assert len(action_sample.shape) < 3, (
-                "Can currently only handle 1D or 2D continuous actions"
-            )
+            assert (
+                len(action_sample.shape) < 3
+            ), "Can currently only handle 1D or 2D continuous actions"
             if len(action_sample.shape) == 2:
                 self._n_actions = action_sample.shape[0]
                 self._action_dim = action_sample.shape[1]
@@ -72,6 +72,11 @@ class Dreamer:
                 self._action_dim = action_sample.shape[0]
 
         self._device = torch.device(self._config.device)
+        self._action_repeat = 1
+
+        # By default, all Atari envs have an action repeat of 4
+        if self._config.env.suite_name == "atari":
+            self._action_repeat = 4
 
         self._keys_to_store = []
         self._replay_buffer = self._configure_buffer()
@@ -87,7 +92,7 @@ class Dreamer:
 
         if self._config.load_existing:
             self.load_checkpoint(self._config.load_existing_path)
-        self._total_env_training_steps = len(self._replay_buffer)
+        self._total_env_training_steps = len(self._replay_buffer) * self._action_repeat
         self._episode_id = 0
 
         self._train_first_step = True
@@ -305,7 +310,9 @@ class Dreamer:
             imagined_latents = combine_det_and_stoch(out["deter"], out["prior_sample"])
 
             # All are numpy arrays of shape (H+1, ...)
-            decoded_images = self._world_model.decode_images(imagined_latents)
+            decoded_images = self._world_model.decode_images(
+                out["deter"], out["prior_sample"]
+            )
             imagined_reward = (
                 self._world_model.predict_reward(imagined_latents)
                 .squeeze()
@@ -463,7 +470,7 @@ class Dreamer:
                 )
                 self._train_first_step = False
 
-            self._total_env_training_steps += 1
+            self._total_env_training_steps += 1 * self._action_repeat
             transition = {
                 "prev_action": self._train_prev_action,
                 "reward": reward,
@@ -587,7 +594,11 @@ class Dreamer:
                     random_actions=False, n_steps=env_steps_per_model_batch
                 )
             end_time = time.perf_counter()
-            self._fps = env_steps_per_model_batch / (end_time - start_time)
+            self._fps = (
+                env_steps_per_model_batch
+                * self._action_repeat
+                / (end_time - start_time)
+            )
 
     def save_checkpoint(self, path: str, step: Optional[int] = None) -> None:
         """

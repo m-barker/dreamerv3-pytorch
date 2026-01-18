@@ -307,8 +307,8 @@ class WorldModel:
             pred = pred.reshape(B, T)
         return pred
 
-    def decode_images(self, latent_state: torch.Tensor) -> np.ndarray:
-        decoder_dict = self._decoder.forward(latent_state)
+    def decode_images(self, deter: torch.Tensor, stoch: torch.Tensor) -> np.ndarray:
+        decoder_dict = self._decoder.forward(deter, stoch)
         decoder_dist = decoder_dict["image"]
         recon_images = decoder_dist.mean()
         recon_images = recon_images.detach().cpu().numpy().squeeze() * 255
@@ -364,10 +364,17 @@ class WorldModel:
             latent_components["deter"], latent_components["post_sample"]
         )
 
-        decoder_in = (
-            post_latent if "decoder" in self._grad_components else post_latent.detach()
+        decoder_deter = (
+            latent_components["deter"]
+            if "decoder" in self._grad_components
+            else latent_components["deter"].detach()
         )
-        reconstructed_obs = self._decoder.forward(decoder_in)
+        decoder_stoch = (
+            latent_components["post_sample"]
+            if "decoder" in self._grad_components
+            else latent_components["post_sample"].detach()
+        )
+        reconstructed_obs = self._decoder.forward(decoder_deter, decoder_stoch)
 
         reward_dist = None
         continue_dist = None

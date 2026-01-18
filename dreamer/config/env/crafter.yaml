@@ -1,0 +1,9 @@
+# Crafter-specific parameters
+suite_name: "crafter"
+task_name: "reward"
+image_res: [64,64]
+image_keys: ["image"]
+vector_keys: []
+extra_keys: []
+seed: ${seed}
+model_steps_per_env_step: 512

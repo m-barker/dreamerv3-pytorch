@@ -12,7 +12,7 @@ batch_length: 64
 compile: True
 eval_every: 10000
 n_eval_episodes: 10
-save_every: 500
+save_every: 10000
 log_every: 500
 prefill_steps: 2500
 # Whether to save a new set of weights every time, or overwrite
