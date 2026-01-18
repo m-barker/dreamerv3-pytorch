@@ -18,13 +18,13 @@ rssm:
   n_blocks: 8
 cnn_encoder:
   initial_depth: ${encoder_init_depth}
-  kernel_size: 5
-  stride: 1
+  kernel_size: 4
+  stride: 2
   min_res: 4
   bias: True
   norm: True
   act_func: "SiLU"
-  max_pool: True
+  max_pool: False
   depth_mult: [2,3,4,4]
   max_pool_stride: 2
   max_pool_kernel: 2

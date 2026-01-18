@@ -227,9 +227,9 @@ class CNNEncoder(nn.Module):
         super().__init__()
 
         assert len(image_shape) == 3, f"Image must be 3D, provided shape: {image_shape}"
-        assert (
-            image_shape[0] == image_shape[1]
-        ), f"Resolution must be square, provided shape: {image_shape}"
+        assert image_shape[0] == image_shape[1], (
+            f"Resolution must be square, provided shape: {image_shape}"
+        )
         if max_pool:
             assert stride == 1, "Stride must be equal to 1 if doing max pooling"
             assert max_pool_stride is not None
@@ -380,8 +380,8 @@ class CNNEncoder(nn.Module):
             (input_res, input_res)
         )
         required_padding = pad_left + pad_right
-        kernel = self._max_pool_kernel if self._max_pool_kernel else self._kernel_size
-        stride = self._max_pool_stride if self._max_pool_stride else self._stride
+        kernel = self._max_pool_kernel if self._use_max_pool else self._kernel_size
+        stride = self._max_pool_stride if self._use_max_pool else self._stride
 
         return math.floor(
             (
@@ -411,6 +411,7 @@ class CNNEncoder(nn.Module):
         current_res = self._image_shape[0]
         while current_res >= self._min_res:
             new_res = self._calculate_output_dim(current_res)
+            print(f"CURRENT RES: {current_res}, NEW RES: {new_res}")
             if new_res < self._min_res:
                 break
             n_layers += 1
