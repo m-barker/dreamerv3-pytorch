@@ -61,9 +61,9 @@ class Dreamer:
             self._n_actions = 1
         else:
             action_sample = self._train_env.action_space.sample()
-            assert len(action_sample.shape) < 3, (
-                "Can currently only handle 1D or 2D continuous actions"
-            )
+            assert (
+                len(action_sample.shape) < 3
+            ), "Can currently only handle 1D or 2D continuous actions"
             if len(action_sample.shape) == 2:
                 self._n_actions = action_sample.shape[0]
                 self._action_dim = action_sample.shape[1]

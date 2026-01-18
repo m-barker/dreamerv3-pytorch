@@ -73,9 +73,10 @@ class Decoder(nn.Module):
         # I.e., a constant h,w for all image shapes
         assert len({(h, w) for h, w, _ in self._image_shapes}) == 1, self._image_shapes
 
-        assert pixel_loss_agg in ("sum", "mean"), (
-            f"Invalid pixel loss aggregation method: {pixel_loss_agg}"
-        )
+        assert pixel_loss_agg in (
+            "sum",
+            "mean",
+        ), f"Invalid pixel loss aggregation method: {pixel_loss_agg}"
 
         total_channels = sum(i[-1] for i in self._image_shapes)
 
@@ -123,7 +124,6 @@ class Decoder(nn.Module):
             the distribution is either of shape (B, T, ...) or (B, ...) where ...
             is the dimensionality of the observation.
         """
-
         T = None
         if len(deter.shape) == 2:
             B, _ = deter.shape
@@ -258,9 +258,9 @@ class CNNDecoder(nn.Module):
         super().__init__()
 
         assert len(image_shape) == 3, f"Image must be 3D, provided shape: {image_shape}"
-        assert image_shape[0] == image_shape[1], (
-            f"Resolution must be square, provided shape: {image_shape}"
-        )
+        assert (
+            image_shape[0] == image_shape[1]
+        ), f"Resolution must be square, provided shape: {image_shape}"
 
         self._image_shape = image_shape
         self._starting_res = starting_res

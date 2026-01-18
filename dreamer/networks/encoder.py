@@ -107,7 +107,6 @@ class Encoder(nn.Module):
         Returns:
             torch.Tensor of shape (B, E) or (B, T, E)
         """
-
         image_data = [data[k] for k in self._image_keys]
         vector_data = None
         if self._vector_keys is not None:
@@ -228,9 +227,9 @@ class CNNEncoder(nn.Module):
         super().__init__()
 
         assert len(image_shape) == 3, f"Image must be 3D, provided shape: {image_shape}"
-        assert image_shape[0] == image_shape[1], (
-            f"Resolution must be square, provided shape: {image_shape}"
-        )
+        assert (
+            image_shape[0] == image_shape[1]
+        ), f"Resolution must be square, provided shape: {image_shape}"
         if max_pool:
             assert stride == 1, "Stride must be equal to 1 if doing max pooling"
             assert max_pool_stride is not None

@@ -4,6 +4,7 @@ import torch
 import gymnasium as gym
 import numpy as np
 import shimmy  # import needed to trigger the registrations of dm environments
+from shimmy.dm_control_compatibility import DmControlCompatibilityV0
 
 from dreamer.utils.utils import resize_image
 from dreamer.envs.wrappers import UnscaleAction
@@ -39,7 +40,11 @@ class DMCWrapper:
         self._seed = seed
         self._return_high_res_image = return_high_res_img
 
-        self._env = gym.make(f"dm_control/{self._task_name}", render_mode="rgb_array")
+        self._env = gym.make(
+            f"dm_control/{self._task_name}",
+            render_mode="rgb_array",
+            render_kwargs={"camera_id": 0},
+        )
         self._env = UnscaleAction(self._env)
         self._step_count = 0
         self._max_steps = max_steps
