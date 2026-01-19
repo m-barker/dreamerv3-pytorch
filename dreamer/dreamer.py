@@ -433,7 +433,6 @@ class Dreamer:
         axes[2, 0].set_ylabel("True", fontsize=12)
 
         plt.tight_layout()
-        plt.show()
         self._wandb_run.log(
             {"evaluation/wm_pred": wandb.Image(fig)},
             step=self._total_env_training_steps,
