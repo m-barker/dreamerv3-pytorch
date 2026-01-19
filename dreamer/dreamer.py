@@ -108,6 +108,11 @@ class Dreamer:
     def _configure_optimiser(
         self,
     ) -> Tuple[SimpleDreamerOptimizer, SimpleDreamerOptimizer]:
+        """
+        Configures and returns two optimisers, one for training the world model,
+        and another for training the agent's behaviour. Can probably be merged
+        into a single optimiser in the future.
+        """
         world_model_params = self._world_model.get_parameters()
         behaviour_params = self._behaviour.get_parameters()
         print(
@@ -139,6 +144,9 @@ class Dreamer:
         )
 
     def _configure_wm(self) -> WorldModel:
+        """
+        Configures and returns the World Model class.
+        """
         training_params = WorldModelTrainingParams(**self._config.world_model_training)
         image_keys = self._config.env.image_keys
         image_shapes = []
@@ -221,6 +229,10 @@ class Dreamer:
         return world_model
 
     def _configure_behaviour(self) -> Behaviour:
+        """
+        Configures and returns the Class responsible for the
+        agent's behaviour (the actor/critic components).
+        """
         actor_params = self._config.actor
         with open_dict(actor_params):
             actor_params.n_actions = self._n_actions
@@ -248,6 +260,9 @@ class Dreamer:
         )
 
     def _print_losses(self):
+        """Prints the agent and world model losses from the latest batch
+        of training data.
+        """
         print("+--------------------------------------------------+")
         print(f"Step: {self._total_env_training_steps}")
         print(f"Episode reward: {self._train_episode_reward}")
@@ -258,6 +273,10 @@ class Dreamer:
         print("+--------------------------------------------------+")
 
     def _train_log(self):
+        """
+        Creates and uploads a log of training information to weights and biases
+        from the latest batch of training data.
+        """
         log_dict = {}
         for k, v in self._world_model_loss_detailed.items():
             log_dict[f"{k}_loss"] = float(v)
@@ -423,6 +442,22 @@ class Dreamer:
 
     @torch.no_grad()
     def step_environment_train(self, random_actions: bool, n_steps: int):
+        """
+        Steps the agent in the training environment, to add transitions to
+        the replay buffer. Updates relevant class data variables to store
+        the world model state across multiple calls to this function.
+
+        Also evaluates the agent and world model if the required number
+        of environment training steps is reached whilst inside of this
+        function.
+
+        Args:
+            random_actions (bool): whether to use random actions to step
+            the environment (if True), or whether to sample actions from
+            the agent's policy (if False).
+
+            n_steps (int): number of environment steps to take.
+        """
         for _ in range(n_steps):
             if (
                 self._total_env_training_steps % self._config.eval_every == 0
@@ -533,6 +568,14 @@ class Dreamer:
 
     @torch.no_grad()
     def step_environment_eval(self, n_episodes: int):
+        """
+        Steps the evaluation environment for a fixed number of episodes, following
+        the current agent's policy. Reports the mean return across all episodes, and
+        logs a video of the agent's behaviour policy.
+
+        Args:
+            n_episodes (int): number of episodes to evaluate the policy over.
+        """
         total_eval_reward = 0.0
         for episode in range(n_episodes):
             obs, info = self._eval_env.reset()
@@ -588,6 +631,13 @@ class Dreamer:
     def train(self) -> None:
         """
         Main training loop.
+
+        Alternates between training the world model and agent behaviour from
+        replay buffer samples, and stepping the agent in the training environment
+        using the current policy, to add more data to the replay buffer.
+
+        Evaluates the world model and policy after every self._eval_every environment
+        training steps.
         """
         self._fps = 0.0
         if len(self._replay_buffer) < self._config.prefill_steps:
@@ -671,8 +721,14 @@ class Dreamer:
         torch.save(checkpoint, path_lib_path)
         print(f"[Dreamer] Saved checkpoint to {path_lib_path}")
 
-    def load_checkpoint(self, path: str, map_location=None) -> None:
-        checkpoint = torch.load(path, map_location=map_location or self._device)
+    def load_checkpoint(self, path: str) -> None:
+        """
+        Loads a saved model checkpoint from a single .pt file.
+
+        Args:
+            path (str): full path to the .pt file to load weights from.
+        """
+        checkpoint = torch.load(path, self._device)
 
         self._world_model.load_state_dict(checkpoint["world_model"])
         self._behaviour.load_state_dict(checkpoint["behaviour"])

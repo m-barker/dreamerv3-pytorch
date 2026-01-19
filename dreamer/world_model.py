@@ -93,6 +93,11 @@ class WorldModel:
         self._grad_components = grad_components
 
     def get_parameters(self) -> List[nn.Parameter]:
+        """
+        Since this class isn't a nn.Module, collate all of the
+        training parameters of the sub classes, and return in
+        a single List, used to give to the optimiser.
+        """
         params: List[nn.Parameter] = []
 
         params += list(self._rssm.parameters())
@@ -121,6 +126,22 @@ class WorldModel:
     ) -> Dict[str, torch.Tensor]:
         """
         Computes the world model loss.
+
+        Args:
+            data (Dict[str, torch.Tensor]): replay buffer sample
+            where each value must be a Tensor of shape (B, T, ...)
+
+            latent_components (Dict[str, torch.Tensor]): world model
+            latent state components computed for the replay buffer sample.
+            Each component must be of shape (B, T, ...)
+
+            recon_obs: Dict[str, Union[MSEDist, SymlogDist]]: dictinoary
+            containing the k,v pairs of the name of each reconstructed observation
+            and the corresponding modelled distribiution for the decoded observation.
+
+            reward_pred: Optional[TwoHotDist]: optional reward prediction.
+
+            cont_pred: Optional[BernoulliDist]: optional continuatino prediction.
         """
         loss_dict = {}
 
@@ -154,6 +175,7 @@ class WorldModel:
             # Used to assign a non-zero probability that the environment terminates
             # at each step, as otherwise when bootstrapping values beyond the cont
             # horizon, the model may more easily assign certain continuation
+            # Can be viewed as playing the same role as the discount rate
             target *= 1 - 1 / self._training_params.cont_horizon
             loss = -cont_pred.log_prob(target).mean(dim=0)
             loss *= self._training_params.continue_loss_scale
@@ -192,6 +214,10 @@ class WorldModel:
         return loss_dict
 
     def state_dict(self) -> Dict[str, Dict[str, torch.Tensor]]:
+        """
+        Returns a dictionary contaning the state_dict of each world
+        model component. Used for saving the model.
+        """
         state = {
             "rssm": self._rssm.state_dict(),
             "encoder": self._encoder.state_dict(),
@@ -215,6 +241,10 @@ class WorldModel:
         state: Dict[str, Dict[str, torch.Tensor]],
         strict: bool = True,
     ):
+        """
+        Loads a given state dictionary. Used when loading the model
+        from a checkpoint.
+        """
         self._rssm.load_state_dict(state["rssm"], strict=strict)
         self._encoder.load_state_dict(state["encoder"], strict=strict)
         self._decoder.load_state_dict(state["decoder"], strict=strict)
@@ -238,7 +268,31 @@ class WorldModel:
         length: int,
         policy: Optional[Callable] = None,
         actions: Optional[torch.Tensor] = None,
-    ):
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Imagines a sequences from a given starting latent state.
+
+        Args:
+            starting_deter (torch.Tensor): starting deterministic
+            state of shape (B, deter_dim).
+
+            starting_stoch (torch.Tensor): starting stochastic state
+            of shape (B, n_dists, n_classes)
+
+            length (int): number of steps to imagine.
+
+            policy (optional[callable]): optional policy to imagine
+            actions with. If given, must be able to take in a latent
+            state (torch Tensor) and return an action (torch tensor).
+
+            actions (optinoal[torch.Tensor]): optional action to take
+            at each imagined step. Must match the length given.
+
+        Returns:
+            Dict[str, torch.Tensor]: dictinoary of imagined latent
+            components, each of shape (B, length + 1, ...). one
+            extra for the length as it also returns the start state.
+        """
         return self._rssm.imagine_sequence(
             starting_deter, starting_stoch, length, policy, actions
         )
@@ -321,6 +375,19 @@ class WorldModel:
         return pred
 
     def decode_images(self, deter: torch.Tensor, stoch: torch.Tensor) -> np.ndarray:
+        """
+        Decodes images and returns a numpy array of the decoded images.
+
+        Args:
+            deter (torch.Tensor): deterministic latent compopnent of shape
+            (B, T, deter_dim)
+
+            stoch (torch.Tensor): stochastic latent component of shape
+            (B, T, n_dists, n_classes)
+
+        Returns:
+            np.ndarray of shape (B, T, H, W, C)
+        """
         decoder_dict = self._decoder.forward(deter, stoch)
         decoder_dist = decoder_dict["image"]
         recon_images = decoder_dist.mean()
@@ -332,11 +399,33 @@ class WorldModel:
     def get_posterior(
         self,
         obs: Dict[str, torch.Tensor],
-        prev_action,
-        is_first,
-        prev_deter=None,
-        prev_stoch=None,
+        prev_action: torch.Tensor,
+        is_first: bool,
+        prev_deter: Optional[torch.Tensor] = None,
+        prev_stoch: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Gets the posterior latent state components of a given observation,
+        previous action, and optional previous latent state.
+
+        Args:
+            obs: Dict[str, torch.Tensor]: dictionary of tensor observations
+            for the current timestep.
+
+            prev_action: torch.Tensor: action taken in the previous timestep.
+
+            is_first (bool): whether this is the first timestep to be modelled.
+
+            prev_deter (optional[torch.Tensor]): previous deterministic state.
+            defaults to None.
+
+            prev_stoch (optional[torch.Tensor]): previous stochastic state.
+            defaults to None.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: determinsitic and posterior
+            stochastic state.
+        """
         encoded_obs = self._encoder.forward(obs)
         if is_first:
             is_first = torch.ones(1, 1).to(torch.int32).to(self._device)
@@ -355,6 +444,20 @@ class WorldModel:
         encoded_obs: torch.Tensor,
         is_first_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
+        """
+        Computes the (posterior) latent state sequence for a sequence of encoded observations
+        and actions. Assumes the first observation in the sequence is the starting state.
+
+        Args:
+            prev_actions (torch.Tensor) of shape (B, T, ...). Contains the previous action
+            for each given observation in the sequence.
+
+            encoded_obs (torch.Tensor) of shape (B, T, encoded_dim). Encoded observation
+            sequence.
+
+            is_first_mask (torch.Tensor) of shape (B, T). 1 whenever the timestep is to
+            be treated as the first step in the sequences, else, 0.
+        """
         return self._rssm.observe_sequence(prev_actions, encoded_obs, is_first_mask)
 
     def train(
