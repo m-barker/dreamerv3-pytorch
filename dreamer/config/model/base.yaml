@@ -121,7 +121,7 @@ world_model_training:
   dynamics_loss_scale: 1.0
   representation_loss_scale: 0.1
   free_nats: 1.0
-  imagination_horizon: ${imag_horizon}
+  cont_horizon: 333
 behaviour_training:
   lam: 0.95
   imag_horizon: ${imag_horizon}
