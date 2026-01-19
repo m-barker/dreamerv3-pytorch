@@ -650,7 +650,7 @@ class RSSM:
                 assert actions.shape[1] == length, (
                     f"Invalid number of actions given: {actions.shape}"
                 )
-                prev_action = actions[:, t]
+                prev_action = actions[:, t].detach()
             else:
                 raise ValueError(
                     "Must provide either a callable policy or a tensor of actions"

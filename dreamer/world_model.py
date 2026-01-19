@@ -170,9 +170,8 @@ class WorldModel:
         prior_dist = torchd.independent.Independent(prior_dist, 1)
 
         dynamics_loss = kl_divergence(post_dist, prior_dist)  # (B, T)
-        dynamics_loss = dynamics_loss.sum(dim=1)  # sum over T
         dynamics_loss = torch.clip(dynamics_loss, min=self._training_params.free_nats)
-        dynamics_loss = dynamics_loss.mean(dim=0)
+        dynamics_loss = dynamics_loss.mean()
 
         dynamics_loss *= self._training_params.dynamics_loss_scale
 
@@ -184,9 +183,8 @@ class WorldModel:
         prior_dist = torchd.independent.Independent(prior_dist, 1)
 
         rep_loss = kl_divergence(post_dist, prior_dist)
-        rep_loss = rep_loss.sum(dim=1)
         rep_loss = torch.clip(rep_loss, min=self._training_params.free_nats)
-        rep_loss = rep_loss.mean(dim=0)
+        rep_loss = rep_loss.mean()
         rep_loss *= self._training_params.representation_loss_scale
 
         loss_dict["representation"] = rep_loss
@@ -244,6 +242,21 @@ class WorldModel:
         return self._rssm.imagine_sequence(
             starting_deter, starting_stoch, length, policy, actions
         )
+
+    def encode_obs(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Encodes observations into a latent tensor.
+
+        Args:
+            data (Dict[str, torch.Tensor]): data to encoded. Typically
+            a replay buffer sample. Each value can either be of shape
+            (B, T, ...) or (B, ...).
+
+        Returns:
+            torch.Tensor of encoded obs of shape (B, encoded_dim) or
+            (B, T, encoded_dim)
+        """
+        return self._encoder.forward(data)
 
     def predict_reward(self, latent_states: torch.Tensor) -> torch.Tensor:
         """
@@ -335,6 +348,14 @@ class WorldModel:
             prev_action, encoded_obs, is_first, prev_deter, prev_stoch
         )
         return latent_components["deter"], latent_components["post_sample"]
+
+    def observe_sequence(
+        self,
+        prev_actions: torch.Tensor,
+        encoded_obs: torch.Tensor,
+        is_first_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        return self._rssm.observe_sequence(prev_actions, encoded_obs, is_first_mask)
 
     def train(
         self, data: Dict[str, torch.Tensor]

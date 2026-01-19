@@ -61,9 +61,9 @@ class Dreamer:
             self._n_actions = 1
         else:
             action_sample = self._train_env.action_space.sample()
-            assert (
-                len(action_sample.shape) < 3
-            ), "Can currently only handle 1D or 2D continuous actions"
+            assert len(action_sample.shape) < 3, (
+                "Can currently only handle 1D or 2D continuous actions"
+            )
             if len(action_sample.shape) == 2:
                 self._n_actions = action_sample.shape[0]
                 self._action_dim = action_sample.shape[1]
@@ -279,61 +279,77 @@ class Dreamer:
         )
 
     def _log_wm_predictions_plot(
-        self, start_obs: Optional[Dict] = None, horizon: int = 15
+        self, data: Dict[str, torch.Tensor], horizon: int = 15
     ) -> None:
-        # 1. Plan a sequence of latent states using world model + policy.
-        # 2. Decoded imagined latents to images.
-        # 3. Tile images in plot using matplotlib
-        # 4. Annotate images with predicted reward, continuation, and value.
-        # 5. Compare with ground truth observations (?)
-        if start_obs is None:
-            obs, _ = self._eval_env.reset()
-        else:
-            obs = start_obs
-        true_images = [obs[self._config.env.image_keys[0]]]
-        true_reward = [0.0]
-        true_continue = [1.0]
-        tensor_obs = {
-            k: torch.tensor(v).unsqueeze(0).to(self._device)
-            for k, v in obs.items()
-            if k in self._keys_to_store
-        }
-        with torch.no_grad():
-            deter, stoch = self._world_model.get_posterior(
-                tensor_obs,
-                torch.zeros(self._n_actions * self._action_dim).to(self._device),
-                True,
-            )
-            out = self._world_model.imagine_sequence(
-                deter, stoch, horizon, self._behaviour._actor.forward_sample
-            )
-            imagined_latents = combine_det_and_stoch(out["deter"], out["prior_sample"])
+        """
+        Creates a plot visualising the world model's prediction versus the ground
+        truth.
 
-            # All are numpy arrays of shape (H+1, ...)
-            decoded_images = self._world_model.decode_images(
-                out["deter"], out["prior_sample"]
+        Args:
+            data (Dict[str, torch.Tensor]): replay buffer sample. Each value is
+            of shape (B, T, ...)
+
+            horizon (int, optional): number of timesteps to predict/visualise. Defaults
+            to 15.
+        """
+
+        with torch.no_grad():
+            encoded_obs = self._world_model.encode_obs(data)
+            latent_components = self._world_model.observe_sequence(
+                data["prev_action"], encoded_obs, data["is_first"]
             )
+            # All of shape (B, T, D)
+            post_latent = combine_det_and_stoch(
+                latent_components["deter"], latent_components["post_sample"]
+            )
+
+            post_decoded_images = self._world_model.decode_images(
+                latent_components["deter"], latent_components["post_sample"]
+            )[0, : horizon + 1]
+            post_predicted_reward = (
+                self._world_model.predict_reward(post_latent).squeeze().cpu().numpy()
+            )[0, : horizon + 1]
+            post_predicted_cont = (
+                self._world_model.predict_cont(post_latent).squeeze().cpu().numpy()
+            )[0, : horizon + 1]
+            post_predicted_val = (
+                self._behaviour.predict_values(post_latent).squeeze().cpu().numpy()
+            )[0, : horizon + 1]
+
+            imagined_components = self._world_model.imagine_sequence(
+                latent_components["deter"][:, 0],
+                latent_components["post_sample"][:, 0],
+                horizon,
+                actions=data["prev_action"][
+                    :, 1:
+                ],  # These are actions to take, not prev action
+            )
+
+            imagined_latent = combine_det_and_stoch(
+                imagined_components["deter"], imagined_components["prior_sample"]
+            )
+
+            imagined_images = self._world_model.decode_images(
+                latent_components["deter"], latent_components["post_sample"]
+            )[0]
             imagined_reward = (
-                self._world_model.predict_reward(imagined_latents)
+                self._world_model.predict_reward(imagined_latent)
                 .squeeze()
                 .cpu()
                 .numpy()
-            )
+            )[0]
             imagined_cont = (
-                self._world_model.predict_cont(imagined_latents).squeeze().cpu().numpy()
-            )
+                self._world_model.predict_cont(imagined_latent).squeeze().cpu().numpy()
+            )[0]
             imagined_val = (
-                self._behaviour.predict_values(imagined_latents).squeeze().cpu().numpy()
+                self._behaviour.predict_values(imagined_latent).squeeze().cpu().numpy()
+            )[0]
+
+            true_images = (
+                data[self._config.env.image_keys[0]][0, : horizon + 1].cpu().numpy()
             )
-        # Drop batch dimension
-        imagined_actions = out["action"].squeeze()
-        for t in range(horizon):
-            obs, reward, terminated, truncated, info = self._eval_env.step(
-                imagined_actions[t].detach().cpu().numpy()
-            )
-            true_images.append(obs[self._config.env.image_keys[0]])
-            true_reward.append(reward)
-            true_continue.append(int(not terminated))
+            true_reward = data["reward"][0, : horizon + 1].cpu().numpy()
+            true_cont = data["continue"][0, : horizon + 1].cpu().numpy()
 
         T = horizon + 1
 
@@ -351,11 +367,11 @@ class Dreamer:
                 clip_on=False,
             )
 
-        fig, axes = plt.subplots(2, T, figsize=(2.5 * T, 5), squeeze=False)
+        fig, axes = plt.subplots(3, T, figsize=(2.5 * T, 5), squeeze=False)
 
         for t in range(T):
             ax = axes[0, t]
-            img = decoded_images[t]
+            img = imagined_images[t]
             ax.imshow(img)
             ax.axis("off")
 
@@ -369,20 +385,36 @@ class Dreamer:
             )
 
             ax = axes[1, t]
+            img = post_decoded_images[t]
+            ax.imshow(img)
+            ax.axis("off")
+
+            ax.set_title(f"t={t}", fontsize=10)
+
+            draw_caption(
+                ax,
+                f"r={post_predicted_reward[t]:.2f}  "
+                f"c={post_predicted_cont[t]:.2f}  "
+                f"v={post_predicted_val[t]:.2f}",
+            )
+
+            ax = axes[2, t]
             img = true_images[t]
             ax.imshow(img)
             ax.axis("off")
 
             draw_caption(
                 ax,
-                f"r={true_reward[t]:.2f}  c={true_continue[t]}",
+                f"r={true_reward[t]:.2f}  c={true_cont[t]}",
             )
 
         # Row labels
         axes[0, 0].set_ylabel("Imagined", fontsize=12)
-        axes[1, 0].set_ylabel("True", fontsize=12)
+        axes[1, 0].set_ylabel("Reconstructed", fontsize=12)
+        axes[2, 0].set_ylabel("True", fontsize=12)
 
         plt.tight_layout()
+        plt.show()
         self._wandb_run.log(
             {"evaluation/wm_pred": wandb.Image(fig)},
             step=self._total_env_training_steps,
@@ -392,9 +424,16 @@ class Dreamer:
     @torch.no_grad()
     def step_environment_train(self, random_actions: bool, n_steps: int):
         for _ in range(n_steps):
+            if (
+                self._total_env_training_steps % self._config.eval_every == 0
+                and self._total_env_training_steps >= self._config.prefill_steps
+            ):
+                self._log_wm_predictions_plot(
+                    self._replay_buffer.sample(2, 16, self._device), 15
+                )
             if self._total_env_training_steps % self._config.eval_every == 0:
-                self._log_wm_predictions_plot()
-                self.step_environment_eval(self._config.n_eval_episodes)
+                pass
+                # self.step_environment_eval(self._config.n_eval_episodes)
             if self._total_env_training_steps % self._config.log_every == 0:
                 self._train_log()
             if self._total_env_training_steps % self._config.save_every == 0:

@@ -223,6 +223,7 @@ class CNNDecoder(nn.Module):
         act_func: str,
         final_sigmoid: bool,
         n_blocks: int,
+        trans_upsample: bool = True,
     ) -> None:
         """
         Args:
@@ -254,6 +255,10 @@ class CNNDecoder(nn.Module):
             n_blocks (int): Number of blocks for processing the block
             linear layer that processes the deterministic latent state
 
+            trans_upsample (bool, optional): whether upsampling should
+            be done using Conv2DTranspose instead of repeating pixels.
+            Defaults to True.
+
         """
         super().__init__()
 
@@ -281,7 +286,11 @@ class CNNDecoder(nn.Module):
         self._final_sigmoid = final_sigmoid
         self._n_blocks = n_blocks
 
-        self._cnn_network = self._configure_cnn_network_transpose()
+        self._cnn_network = (
+            self._configure_cnn_network_transpose()
+            if trans_upsample
+            else self._configure_cnn_network()
+        )
 
         self._spacial_init_dim = (
             self._starting_res * self._starting_res * self._starting_depth
