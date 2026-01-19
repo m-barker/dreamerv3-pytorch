@@ -32,7 +32,7 @@ class WorldModelTrainingParams:
     # floor for stochastic KL divergence loss
     free_nats: float = 1.0
     # Used for the continuation loss
-    imagination_horizon: int = 15
+    cont_horizon: int = 333
 
 
 class WorldModel:
@@ -152,9 +152,9 @@ class WorldModel:
             target = data["continue"].detach()
             target = target.reshape((B * T, *target.shape[2:])).squeeze()
             # Used to assign a non-zero probability that the environment terminates
-            # at each step, as otherwise when bootstrapping values beyond the imagination
+            # at each step, as otherwise when bootstrapping values beyond the cont
             # horizon, the model may more easily assign certain continuation
-            target *= 1 - 1 / self._training_params.imagination_horizon
+            target *= 1 - 1 / self._training_params.cont_horizon
             loss = -cont_pred.log_prob(target).mean(dim=0)
             loss *= self._training_params.continue_loss_scale
             loss_dict["continue"] = loss

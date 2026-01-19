@@ -258,9 +258,9 @@ class CNNDecoder(nn.Module):
         super().__init__()
 
         assert len(image_shape) == 3, f"Image must be 3D, provided shape: {image_shape}"
-        assert (
-            image_shape[0] == image_shape[1]
-        ), f"Resolution must be square, provided shape: {image_shape}"
+        assert image_shape[0] == image_shape[1], (
+            f"Resolution must be square, provided shape: {image_shape}"
+        )
 
         self._image_shape = image_shape
         self._starting_res = starting_res
@@ -274,14 +274,14 @@ class CNNDecoder(nn.Module):
         # depth equal to the number of image channels.
         self._starting_depth = depth_mults[-1] * starting_depth
         self._init_depth = starting_depth
-        self._depth_mults = reversed(list(depth_mults[:-1]))
+        self._depth_mults = reversed(list(depth_mults))
         self._bias = bias
         self._norm = norm
         self._act_func = act_func
         self._final_sigmoid = final_sigmoid
         self._n_blocks = n_blocks
 
-        self._cnn_network = self._configure_cnn_network()
+        self._cnn_network = self._configure_cnn_network_transpose()
 
         self._spacial_init_dim = (
             self._starting_res * self._starting_res * self._starting_depth
@@ -314,6 +314,52 @@ class CNNDecoder(nn.Module):
         self._sp_norm = RMSNormWrapper(self._spacial_init_dim)
 
         self._cnn_network.apply(truncated_normal_weight_init)
+
+    def _configure_cnn_network_transpose(self) -> nn.Sequential:
+        layers = []
+        activation_function = getattr(nn, self._act_func)
+        current_depth = self._starting_depth
+
+        for i, depth_mult in enumerate(self._depth_mults):
+            out_channels = int(self._init_depth * depth_mult)
+
+            # ConvTranspose2d with stride=2 doubles H,W
+            layers.append(
+                nn.ConvTranspose2d(
+                    in_channels=current_depth,
+                    out_channels=out_channels,
+                    kernel_size=self._kernel_size,
+                    stride=2,
+                    padding=self._kernel_size // 2,
+                    output_padding=1,  # ensures doubling exactly
+                    bias=self._bias,
+                )
+            )
+
+            if self._norm:
+                layers.append(
+                    RMSNormWrapper(
+                        out_channels,
+                        permute=[0, 2, 3, 1],
+                    )
+                )
+            layers.append(activation_function())
+
+            current_depth = out_channels
+
+        # Final conv layer to match image channels, no upsampling here
+        layers.append(
+            nn.Conv2d(
+                in_channels=current_depth,
+                out_channels=self._image_shape[-1],
+                kernel_size=self._kernel_size,
+                stride=1,
+                padding=self._kernel_size // 2,
+                bias=self._bias,
+            )
+        )
+
+        return nn.Sequential(*layers)
 
     def _configure_cnn_network(self) -> nn.Sequential:
         layers = []
