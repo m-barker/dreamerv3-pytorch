@@ -37,12 +37,14 @@ def configure_environments(cfg: DictConfig):
             task_name=cfg.env.task_name,
             image_res=cfg.env.image_res,
             seed=cfg.seed,
+            sticky=cfg.env.sticky,
         )
         eval_env = AtariWrapper(
             task_name=cfg.env.task_name,
             image_res=cfg.env.image_res,
             seed=cfg.seed,
             return_high_res_image=True,
+            sticky=cfg.env.sticky,
         )
     elif cfg.env.suite_name == "crafter":
         train_env = CrafterWrapper(

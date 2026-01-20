@@ -17,6 +17,7 @@ class AtariWrapper:
         seed: int,
         return_high_res_image: bool = False,
         obs_type: str = "rgb",
+        sticky: bool = True,
     ) -> None:
         """
         Args:
@@ -38,7 +39,10 @@ class AtariWrapper:
         self._seed = seed
         self._return_high_res = return_high_res_image
 
-        self._env = gym.make(f"ALE/{task_name}", obs_type=obs_type)
+        repeat_prob = 0.25 if sticky else 0.0
+        self._env = gym.make(
+            f"ALE/{task_name}", obs_type=obs_type, repeat_action_probability=repeat_prob
+        )
 
     @property
     def observation_space(self) -> gym.spaces.Dict:
