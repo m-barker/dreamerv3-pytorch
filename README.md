@@ -35,7 +35,7 @@ Configuration is managed via [Hydra](https://hydra.cc/docs/intro/), whose entry 
 python main.py env=dmc
 ```
 
-Logging of metrics defaults to using Weights and Biases. If this is your first time using WandB, you will be prompted to login/set up an account via the command line. WandB logging can be turned off via `wandb=False`. Model weights and replay buffer is, by default, stored under a `./storage/...` storage folder, but this can be customised as desired.
+Logging of metrics defaults to using Weights and Biases, as well as saving a csv and json locally of all log metrics under `./storage/logs/`. If this is your first time using WandB, you will be prompted to login/set up an account via the command line. WandB logging can be turned off via `wandb=False`. Model weights and replay buffer is, by default, stored under a `./storage/...` storage folder, but this can be customised as desired.
 
 By default, the 12M parameter model is used, with configuration existing for all other model sizes given in the Dreamer V3 Nature paper.
 
