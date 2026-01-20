@@ -123,7 +123,7 @@ class WorldModel:
         recon_obs: Dict[str, Union[MSEDist, SymlogDist]],
         reward_pred: Optional[TwoHotDist] = None,
         cont_pred: Optional[BernoulliDist] = None,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
         """
         Computes the world model loss.
 
@@ -141,9 +141,12 @@ class WorldModel:
 
             reward_pred: Optional[TwoHotDist]: optional reward prediction.
 
-            cont_pred: Optional[BernoulliDist]: optional continuatino prediction.
+            cont_pred: Optional[BernoulliDist]: optional continuation prediction.
+        Returns:
+            Tuple[Dict, Dict]: loss dictionary and logging metrics dictionary.
         """
         loss_dict = {}
+        metrics = {}
 
         for obs_name, obs_recon in recon_obs.items():
             assert obs_name in data.keys(), f"Unreconised reconstructed obs {obs_name}"
@@ -204,6 +207,9 @@ class WorldModel:
         post_dist = torchd.independent.Independent(post_dist, 1)
         prior_dist = torchd.independent.Independent(prior_dist, 1)
 
+        metrics["post_entropy"] = post_dist.entropy().mean()
+        metrics["prior_entropy"] = prior_dist.entropy().mean()
+
         rep_loss = kl_divergence(post_dist, prior_dist)
         rep_loss = torch.clip(rep_loss, min=self._training_params.free_nats)
         rep_loss = rep_loss.mean()
@@ -211,7 +217,7 @@ class WorldModel:
 
         loss_dict["representation"] = rep_loss
 
-        return loss_dict
+        return loss_dict, metrics
 
     def state_dict(self) -> Dict[str, Dict[str, torch.Tensor]]:
         """
@@ -462,17 +468,20 @@ class WorldModel:
 
     def train(
         self, data: Dict[str, torch.Tensor]
-    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    ) -> Tuple[
+        Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]
+    ]:
         """
         Args:
             data [Dict[str, torch.Tensor]]: pre-processed replay
             buffer data, each tensor is of shape (B, T, ...)
 
         Returns:
-            Tuple[Dict[str, torch.Tensor], torch.Tensor] dictionary of
+            Tuple[Dict[str, torch.Tensor], torch.Tensor, torhc.Tenosr, Dict] dictionary of
             loss scalars for each components and computed posterior latent
             states by the world model, which are then used for the starting
-            imagination states to train the actor-critic.
+            imagination states to train the actor-critic, and a dictionary
+            of metircs used for logging purposes.
 
         """
         encoded_obs = self._encoder.forward(data)
@@ -527,8 +536,13 @@ class WorldModel:
             continue_dist = self._continue_head.forward(continue_out)
             assert isinstance(continue_dist, BernoulliDist)
 
-        loss = self._compute_loss(
+        loss, metrics = self._compute_loss(
             data, latent_components, reconstructed_obs, reward_dist, continue_dist
         )
 
-        return loss, latent_components["deter"], latent_components["post_sample"]
+        return (
+            loss,
+            latent_components["deter"],
+            latent_components["post_sample"],
+            metrics,
+        )

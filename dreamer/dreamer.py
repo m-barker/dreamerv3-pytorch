@@ -87,6 +87,8 @@ class Dreamer:
 
         self._world_model_loss = torch.tensor(0.0)
         self._world_model_loss_detailed = {}
+        self._world_model_metrics = {}
+        self._behaviour_metrics = {}
         self._actor_loss = 0.0
         self._critic_loss = 0.0
 
@@ -280,6 +282,10 @@ class Dreamer:
         log_dict = {}
         for k, v in self._world_model_loss_detailed.items():
             log_dict[f"{k}_loss"] = float(v)
+        for k, v in self._world_model_metrics.items():
+            log_dict[k] = float(v)
+        for k, v in self._behaviour_metrics.items():
+            log_dict[k] = float(v)
         log_dict["actor_loss"] = float(self._actor_loss)
         log_dict["critic_loss"] = float(self._critic_loss)
         log_dict["fps"] = self._fps
@@ -656,8 +662,8 @@ class Dreamer:
                 self._config.batch_size, self._config.batch_length, self._device
             )
 
-            wm_loss, starting_deter, starting_stoch = self._world_model.train(
-                training_data
+            wm_loss, starting_deter, starting_stoch, self._world_model_metrics = (
+                self._world_model.train(training_data)
             )
 
             self._world_model_loss_detailed = wm_loss
@@ -668,8 +674,10 @@ class Dreamer:
                 (-1, self._config.rssm.n_stoch_dists, self._config.n_stoch_cats)
             )
 
-            actor_loss, critic_loss = self._behaviour.imag_train(
-                self._world_model, starting_deter.detach(), starting_stoch.detach()
+            actor_loss, critic_loss, self._behaviour_metrics = (
+                self._behaviour.imag_train(
+                    self._world_model, starting_deter.detach(), starting_stoch.detach()
+                )
             )
             self._actor_loss = actor_loss
             self._critic_loss = critic_loss

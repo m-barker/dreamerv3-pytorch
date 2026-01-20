@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List, Dict
 
 import torch
 
@@ -144,7 +144,7 @@ class Behaviour(nn.Module):
         starting_stoch: torch.Tensor,
         reward_func: Optional[Callable] = None,
         continue_func: Optional[Callable] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         """
         Trains the actor and critic inside of the world model.
 
@@ -166,10 +166,11 @@ class Behaviour(nn.Module):
             If None, uses the world model's continue head. Defaults to None.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: actor loss and critic loss, averaged
-            over batch and time dimensions.
+            Tuple[torch.Tensor, torch.Tensor, Dict]: actor loss and critic loss, averaged
+            over batch and time dimensions, and metrics used for logging.
         """
         self._update_slow_target()
+        metrics = {}
         with torch.no_grad():
             out = world_model.imagine_sequence(
                 starting_deter.detach(),
@@ -191,11 +192,19 @@ class Behaviour(nn.Module):
         # Shape (B, H + 1, 1)
         imagined_value = self._critic.forward_and_pred(imagined_latents)
 
+        metrics["mean_imagined_value"] = imagined_value.mean()
+        metrics["max_imagined_value"] = imagined_value.max()
+        metrics["min_imagined_value"] = imagined_value.min()
+
         if reward_func is not None:
             imagined_reward = reward_func(imagined_latents)
         else:
             with torch.no_grad():
                 imagined_reward = world_model.predict_reward(imagined_latents)
+
+        metrics["mean_imagined_reward"] = imagined_reward.mean()
+        metrics["max_imagined_reward"] = imagined_reward.max()
+        metrics["min_imagined_reward"] = imagined_reward.min()
 
         if continue_func is not None:
             imagined_cont = continue_func(imagined_latents)
@@ -203,10 +212,18 @@ class Behaviour(nn.Module):
             with torch.no_grad():
                 imagined_cont = world_model.predict_cont(imagined_latents, soft=True)
 
+        metrics["mean_imagined_continue"] = imagined_cont.mean()
+        metrics["max_imagined_continue"] = imagined_cont.max()
+        metrics["min_imagined_continue"] = imagined_cont.min()
+
         # Shape (B, H)
         ret = self._lambda_return(
             imagined_reward.squeeze(), imagined_value.squeeze(), imagined_cont
         )
+
+        metrics["mean_lambda_return"] = ret.mean()
+        metrics["max_lambda_return"] = ret.max()
+        metrics["min_lambda_return"] = ret.min()
 
         ret_offset = 0.0
         ret_scale = 1.0
@@ -214,12 +231,19 @@ class Behaviour(nn.Module):
             ret_offset, ret_scale = self._ret_norm(ret, self.ret_norm_vals)
         advantage = (ret - imagined_value[:, :-1].squeeze()) / ret_scale
 
+        metrics["mean_advantage"] = advantage.mean()
+        metrics["max_advantage"] = advantage.max()
+        metrics["min_advantage"] = advantage.min()
+
         logpi = policy.log_prob(imagined_actions.detach())
         policy_ent = policy.entropy()
         if len(logpi.shape) == 3:
             logpi = logpi.sum(-1)
             assert len(policy_ent.shape) == 3
             policy_ent = policy_ent.sum(-1)
+
+        metrics["policy_entropy"] = policy_ent.mean()
+
         cum_continue = torch.cumprod(imagined_cont[:, :-1], dim=-1).detach()
         # Shift the continues right by one, to not mask out the terminal state.
         cum_continue = torch.cat(
@@ -234,6 +258,12 @@ class Behaviour(nn.Module):
         flattened_latents = imagined_latents[:, :-1].reshape((B * H, -1))
         value_dist = self._critic(flattened_latents)
         slow_val_dist = self._slow_val_target(flattened_latents)
+        slow_val_pred = slow_val_dist.predict()
+
+        metrics["mean_slow_value"] = slow_val_pred.mean()
+        metrics["max_slow_value"] = slow_val_pred.max()
+        metrics["min_slow_value"] = slow_val_pred.min()
+
         # Rehsape RET to (B*H, 1)
         val_loss = value_dist.loss(ret.detach().flatten().unsqueeze(-1))
 
@@ -241,7 +271,7 @@ class Behaviour(nn.Module):
         value_loss = flattened_cont * (
             val_loss
             + self._training_params.slow_reg
-            * value_dist.loss(slow_val_dist.predict().unsqueeze(-1))
+            * value_dist.loss(slow_val_pred.unsqueeze(-1))
         )
 
-        return policy_loss.mean(), value_loss.mean()
+        return policy_loss.mean(), value_loss.mean(), metrics
