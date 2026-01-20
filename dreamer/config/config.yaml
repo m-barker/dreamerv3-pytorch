@@ -18,6 +18,7 @@ prefill_steps: 2500
 # Whether to save a new set of weights every time, or overwrite
 checkpoint: False
 weights_dir: "./storage/weights/"
+log_dir: "./storage/logs/"
 load_existing: False
 load_existing_path: "./storage/weights/latest.pt"
 wandb: True

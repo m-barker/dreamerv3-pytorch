@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import wandb
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from gymnasium.spaces.discrete import Discrete
 from omegaconf import DictConfig, open_dict, OmegaConf
@@ -53,6 +54,8 @@ class Dreamer:
             )
         else:
             self._wandb_run = wandb.init(mode="disabled")
+
+        self._logs = []
 
         self._discrete_actor = isinstance(self._train_env.action_space, Discrete)
 
@@ -292,6 +295,8 @@ class Dreamer:
 
         print(f"Train logs at step {self._total_env_training_steps}: {log_dict}")
 
+        self._logs.append({"env_step": self._total_env_training_steps, **log_dict})
+
         self._wandb_run.log(log_dict, step=self._total_env_training_steps)
 
     def _log_video(self, image_sequence: List[np.ndarray]) -> None:
@@ -445,6 +450,19 @@ class Dreamer:
         )
         plt.close(fig)
 
+    def _save_logs(self) -> None:
+        """
+        Saves the logs as a csv and json to the logdirectory
+        """
+        path_lib_path = Path(self._config.log_dir)
+        path_lib_path.mkdir(parents=True, exist_ok=True)
+
+        df = pd.DataFrame(self._logs).set_index("env_step").sort_index()
+        out_path = os.path.join(path_lib_path, "metrics")
+
+        df.to_csv(f"{out_path}.csv")
+        df.reset_index().to_json(f"{out_path}.jsonl", orient="records", lines=True)
+
     @torch.no_grad()
     def step_environment_train(self, random_actions: bool, n_steps: int):
         """
@@ -472,14 +490,14 @@ class Dreamer:
                     self._replay_buffer.sample(2, 16, self._device), 15
                 )
             if self._total_env_training_steps % self._config.eval_every == 0:
-                pass
-                # self.step_environment_eval(self._config.n_eval_episodes)
+                self.step_environment_eval(self._config.n_eval_episodes)
             if self._total_env_training_steps % self._config.log_every == 0:
                 self._train_log()
             if self._total_env_training_steps % self._config.save_every == 0:
                 self.save_checkpoint(
                     self._config.weights_dir, self._total_env_training_steps
                 )
+                self._save_logs()
             if self._train_done:
                 reward = 0.0
                 self._train_obs, info = self._train_env.reset()
@@ -497,6 +515,12 @@ class Dreamer:
                 self._wandb_run.log(
                     {"train_ret": self._train_episode_reward},
                     step=self._total_env_training_steps,
+                )
+                self._logs.append(
+                    {
+                        "env_step": self._total_env_training_steps,
+                        "train_ret": self._train_episode_reward,
+                    }
                 )
                 self._train_episode_reward = 0.0
                 self._train_done = False
@@ -630,6 +654,9 @@ class Dreamer:
         self._wandb_run.log(
             {"evaluation/eval_ret": mean_eval_reward},
             step=self._total_env_training_steps,
+        )
+        self._logs.append(
+            {"env_step": self._total_env_training_steps, "eval_ret": mean_eval_reward}
         )
         self._log_video(video_obs)
 
