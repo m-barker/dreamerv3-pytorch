@@ -289,9 +289,14 @@ class Dreamer:
             log_dict[k] = float(v)
         for k, v in self._behaviour_metrics.items():
             log_dict[k] = float(v)
+
         log_dict["actor_loss"] = float(self._actor_loss)
         log_dict["critic_loss"] = float(self._critic_loss)
         log_dict["fps"] = self._fps
+        log_dict["world_model_train_time"] = self._wm_batch_train_time
+        log_dict["behaviour_train_time"] = self._behaviour_train_time
+        log_dict["grad_update_time"] = self._grad_update_time
+        log_dict["env_step_time"] = self._env_step_time
 
         print(f"Train logs at step {self._total_env_training_steps}: {log_dict}")
 
@@ -672,6 +677,10 @@ class Dreamer:
         training steps.
         """
         self._fps = 0.0
+        self._env_step_time = 0.0
+        self._wm_batch_train_time = 0.0
+        self._behaviour_train_time = 0.0
+        self._grad_update_time = 0.0
         if len(self._replay_buffer) < self._config.prefill_steps:
             self.step_environment_train(
                 random_actions=True,
@@ -688,10 +697,12 @@ class Dreamer:
             training_data = self._replay_buffer.sample(
                 self._config.batch_size, self._config.batch_length, self._device
             )
-
+            wm_start_time = time.perf_counter()
             wm_loss, starting_deter, starting_stoch, self._world_model_metrics = (
                 self._world_model.train(training_data)
             )
+            wm_end_time = time.perf_counter()
+            self._wm_batch_train_time = wm_end_time - wm_start_time
 
             self._world_model_loss_detailed = wm_loss
             self._world_model_loss = sum([v for k, v in wm_loss.items()])
@@ -701,21 +712,30 @@ class Dreamer:
                 (-1, self._config.rssm.n_stoch_dists, self._config.n_stoch_cats)
             )
 
+            behaviour_start_time = time.perf_counter()
             actor_loss, critic_loss, self._behaviour_metrics = (
                 self._behaviour.imag_train(
                     self._world_model, starting_deter.detach(), starting_stoch.detach()
                 )
             )
+            behaviour_end_time = time.perf_counter()
+            self._behaviour_train_time = behaviour_end_time - behaviour_start_time
             self._actor_loss = actor_loss
             self._critic_loss = critic_loss
 
+            grad_start_time = time.perf_counter()
             self._wm_optim(self._world_model_loss)
             self._behaviour_optim(self._actor_loss + self._critic_loss)
+            grad_end_time = time.perf_counter()
+            self._grad_update_time = grad_end_time - grad_start_time
 
+            env_start_time = time.perf_counter()
             with torch.no_grad():
                 self.step_environment_train(
                     random_actions=False, n_steps=env_steps_per_model_batch
                 )
+            env_end_time = time.perf_counter()
+            self._env_step_time = env_end_time - env_start_time
             end_time = time.perf_counter()
             self._fps = (
                 env_steps_per_model_batch
