@@ -24,7 +24,13 @@ from dreamer.networks.shared import (
     OneHotParams,
     TwoHotDistParams,
 )
-from dreamer.utils.configuration import configure_environments
+from dreamer.utils.configuration import (
+    configure_environments,
+    configure_world_model,
+    configure_behaviour,
+    configure_buffer,
+    configure_optimiser,
+)
 from dreamer.utils.optimiser import SimpleDreamerOptimizer
 from dreamer.utils.utils import set_seed_everywhere, combine_det_and_stoch
 from dreamer.world_model import WorldModel, WorldModelTrainingParams
@@ -81,12 +87,27 @@ class Dreamer:
         if self._config.env.suite_name == "atari":
             self._action_repeat = 4
 
-        self._keys_to_store = []
-        self._replay_buffer = self._configure_buffer()
+        self._replay_buffer, self._keys_to_store = configure_buffer(self._config)
 
-        self._world_model = self._configure_wm()
-        self._behaviour = self._configure_behaviour()
-        self._wm_optim, self._behaviour_optim = self._configure_optimiser()
+        self._world_model = configure_world_model(
+            self._config,
+            self._action_dim,
+            self._n_actions,
+            self._device,
+            self._train_env.observation_space,
+        )
+        self._behaviour = configure_behaviour(
+            self._config,
+            self._n_actions,
+            self._action_dim,
+            self._device,
+            self._discrete_actor,
+        )
+        self._wm_optim, self._behaviour_optim = configure_optimiser(
+            self._world_model.get_parameters(),
+            self._behaviour.get_parameters(),
+            self._config,
+        )
 
         self._world_model_loss = torch.tensor(0.0)
         self._world_model_loss_detailed = {}
@@ -97,6 +118,7 @@ class Dreamer:
 
         if self._config.load_existing:
             self.load_checkpoint(self._config.load_existing_path)
+
         self._total_env_training_steps = len(self._replay_buffer) * self._action_repeat
         self._episode_id = 0
 
@@ -109,160 +131,6 @@ class Dreamer:
         self._train_prev_stoch = None
         self._train_obs = {}
         self._train_episode_reward = 0.0
-
-    def _configure_optimiser(
-        self,
-    ) -> Tuple[SimpleDreamerOptimizer, SimpleDreamerOptimizer]:
-        """
-        Configures and returns two optimisers, one for training the world model,
-        and another for training the agent's behaviour. Can probably be merged
-        into a single optimiser in the future.
-        """
-        world_model_params = self._world_model.get_parameters()
-        behaviour_params = self._behaviour.get_parameters()
-        print(
-            f"Total parameters: {sum(p.numel() for p in world_model_params + behaviour_params)}"
-        )
-        return SimpleDreamerOptimizer(
-            parameters=world_model_params, **self._config.world_model_optim
-        ), SimpleDreamerOptimizer(
-            parameters=behaviour_params, **self._config.behaviour_optim
-        )
-
-    def _configure_buffer(self) -> Buffer:
-        """
-        Sets up the replay buffer based on the configuration.
-        """
-        keys_to_sample = ["reward", "is_first", "prev_action", "continue", "episode_id"]
-        keys_to_sample.extend(self._config.env.image_keys)
-        keys_to_sample.extend(self._config.env.vector_keys)
-        keys_to_sample.extend(self._config.env.extra_keys)
-
-        self._keys_to_store = keys_to_sample
-
-        return Buffer(
-            capacity=self._config.replay.capacity,
-            keys_to_sample=keys_to_sample,
-            disk_path=self._config.replay.disk_path,
-            load_existing=self._config.replay.load_existing,
-            save_every=self._config.replay.save_every,
-        )
-
-    def _configure_wm(self) -> WorldModel:
-        """
-        Configures and returns the World Model class.
-        """
-        training_params = WorldModelTrainingParams(**self._config.world_model_training)
-        image_keys = self._config.env.image_keys
-        image_shapes = []
-        vector_keys = self._config.env.vector_keys
-        vector_shapes = []
-
-        obs_space = self._train_env.observation_space
-        for k in image_keys:
-            if k in obs_space.keys():
-                image_shapes.append(obs_space[k].shape)
-            else:
-                raise ValueError(
-                    f"Required image key: {k} not found in environment observation space"
-                )
-
-        if vector_keys:
-            for k in vector_keys:
-                if k in obs_space.keys():
-                    vector_shapes.append(obs_space[k].shape)
-                else:
-                    raise ValueError(
-                        f"Required vector key: {k} not found in environment observation space"
-                    )
-
-        cnn_encoder_params = CNNParams(**self._config.cnn_encoder)
-        encoder_params = EncoderParams(
-            image_keys=image_keys,
-            image_shapes=image_shapes,
-            cnn_params=cnn_encoder_params,
-        )
-        if vector_keys:
-            encoder_params.vector_keys = vector_keys
-            encoder_params.vector_shapes = vector_shapes
-            encoder_params.mlp_params = MLPParams(**self._config.mlp_encoder)
-
-        # Each vector is embedded as hidden_size dimensions
-        encoded_dim = self._config.encoder_embed_dim + (
-            len(vector_keys) * self._config.hidden_size
-        )
-
-        cnn_decoder_params = DecoderCNNParams(**self._config.cnn_decoder)
-        decoder_params = DecoderParams(
-            image_keys=image_keys,
-            image_shapes=image_shapes,
-            cnn_params=cnn_decoder_params,
-        )
-        if vector_keys:
-            decoder_params.vector_keys = vector_keys
-            decoder_params.vector_shapes = vector_shapes
-            decoder_params.mlp_params = MLPParams(**self._config.mlp_decoder)
-
-        rssm_params = self._config.rssm
-        with open_dict(rssm_params):
-            # We want the flattened action dimensionality
-            rssm_params.action_dim = self._action_dim * self._n_actions
-        rssm_params = RSSMParams(**rssm_params)
-        rssm_params.compile = self._config.compile
-        rssm_params.encoded_size = encoded_dim
-        rssm_params.device = self._device
-
-        reward_network_params = MLPParams(**self._config.reward_mlp)
-        reward_head_params = TwoHotDistParams(**self._config.reward_head)
-
-        continue_network_params = MLPParams(**self._config.continue_mlp)
-        continue_head_params = BernouliDistParams()
-
-        world_model = WorldModel(
-            training_params=training_params,
-            rssm_params=rssm_params,
-            encoder_params=encoder_params,
-            decoder_params=decoder_params,
-            grad_components=self._config.world_model_grad_components,
-            reward_params=MLPandHeadParams(reward_network_params, reward_head_params),
-            continue_params=MLPandHeadParams(
-                continue_network_params, continue_head_params
-            ),
-            device=self._device,
-            compile=self._config.compile,
-        )
-        return world_model
-
-    def _configure_behaviour(self) -> Behaviour:
-        """
-        Configures and returns the Class responsible for the
-        agent's behaviour (the actor/critic components).
-        """
-        actor_params = self._config.actor
-        with open_dict(actor_params):
-            actor_params.n_actions = self._n_actions
-            actor_params.action_dim = self._action_dim
-
-        if self._discrete_actor:
-            actor_dist = OneHotParams(**self._config.actor_discrete_head)
-        else:
-            actor_dist = BoundedNormalParams(**self._config.actor_cont_head)
-
-        actor_params = ActorParams(dist_params=actor_dist, **actor_params)
-
-        critic_params = self._config.critic
-        critic_dist_params = TwoHotDistParams(**self._config.critic_head)
-        critic_params = CriticParams(two_hot_params=critic_dist_params, **critic_params)
-
-        training_params = BehaviourTrainingParams(**self._config.behaviour_training)
-
-        return Behaviour(
-            actor_params=actor_params,
-            critic_params=critic_params,
-            training_params=training_params,
-            device=self._device,
-            compile=self._config.compile,
-        )
 
     def _print_losses(self):
         """Prints the agent and world model losses from the latest batch
