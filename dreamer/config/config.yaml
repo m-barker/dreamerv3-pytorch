@@ -3,6 +3,10 @@ defaults:
   - env: minigrid
   - _self_
 
+# Torch precision settings
+matmul_prec: "medium"
+cudnn_bench: True
+
 # Experiment Settings
 seed: 0
 device: "cuda"

@@ -32,7 +32,11 @@ from dreamer.utils.configuration import (
     configure_optimiser,
 )
 from dreamer.utils.optimiser import SimpleDreamerOptimizer
-from dreamer.utils.utils import set_seed_everywhere, combine_det_and_stoch
+from dreamer.utils.utils import (
+    set_seed_everywhere,
+    combine_det_and_stoch,
+    set_torch_precision,
+)
 from dreamer.world_model import WorldModel, WorldModelTrainingParams
 from dreamer.behaviour import Behaviour, BehaviourTrainingParams
 from dreamer.utils.replay import Buffer
@@ -48,6 +52,7 @@ class Dreamer:
         self._config = config
 
         set_seed_everywhere(self._config.seed)
+        set_torch_precision(self._config.matmul_prec, self._config.cudnn_bench)
 
         self._train_env, self._eval_env = configure_environments(self._config)
 

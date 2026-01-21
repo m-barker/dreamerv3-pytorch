@@ -140,11 +140,11 @@ world_model_optim:
   lr: 4e-5
   weight_decay: 0.0
   grad_clip: 1000.0
-  use_amp: False
+  use_amp: True
 behaviour_optim:
   lr: 4e-5
   weight_decay: 0.0
   grad_clip: 100.0
-  use_amp: False
+  use_amp: True
 
 

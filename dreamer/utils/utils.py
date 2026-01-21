@@ -107,3 +107,8 @@ def resize_image(
     """
 
     return cv2.resize(source_image, target_size, interpolation=resize_method)
+
+
+def set_torch_precision(matmul_precision: str, benchmark: bool) -> None:
+    torch.set_float32_matmul_precision(matmul_precision)
+    torch.backends.cudnn.benchmark = benchmark
