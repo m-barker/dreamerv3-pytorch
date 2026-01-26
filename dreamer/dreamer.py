@@ -489,7 +489,7 @@ class Dreamer:
             first_step = True
             prev_deter = None
             prev_stoch = None
-            prev_action = torch.zeros((self._n_actions, self._action_dim)).squeeze()
+            prev_action = torch.zeros((self._n_actions * self._action_dim)).squeeze()
             done = False
             episode_reward = 0.0
             video_obs = []
