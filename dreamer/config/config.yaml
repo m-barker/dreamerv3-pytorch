@@ -27,6 +27,8 @@ load_existing: False
 load_existing_path: "./storage/weights/latest.pt"
 wandb: True
 wandb_project: "dreamerv3-pytorch"
+save_model: True
+save_replay: True
 
 replay:
   capacity: 1e6
