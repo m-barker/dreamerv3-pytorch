@@ -116,6 +116,14 @@ class WorldModel:
 
         return params
 
+    def get_init_deter(self, batch_size: int = 1) -> torch.Tensor:
+        init_deter, _ = self._rssm._get_initial_state(batch_size)
+        return init_deter
+
+    def get_init_stoch(self, batch_size: int = 1) -> torch.Tensor:
+        _, init_stoch = self._rssm._get_initial_state(batch_size)
+        return init_stoch
+
     def _compute_loss(
         self,
         data: Dict[str, torch.Tensor],
@@ -406,9 +414,9 @@ class WorldModel:
         self,
         obs: Dict[str, torch.Tensor],
         prev_action: torch.Tensor,
-        is_first: bool,
-        prev_deter: Optional[torch.Tensor] = None,
-        prev_stoch: Optional[torch.Tensor] = None,
+        prev_deter: torch.Tensor,
+        prev_stoch: torch.Tensor,
+        sample_latent: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Gets the posterior latent state components of a given observation,
@@ -420,27 +428,26 @@ class WorldModel:
 
             prev_action: torch.Tensor: action taken in the previous timestep.
 
-            is_first (bool): whether this is the first timestep to be modelled.
+            prev_deter (torch.Tensor): previous deterministic state.
 
-            prev_deter (optional[torch.Tensor]): previous deterministic state.
-            defaults to None.
+            prev_stoch (torch.Tensor): previous stochastic state.
 
-            prev_stoch (optional[torch.Tensor]): previous stochastic state.
-            defaults to None.
+            sample_latent (optional, bool): whether to sample the stochasticv
+            component. Defaults to True
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: determinsitic and posterior
             stochastic state.
         """
         encoded_obs = self._encoder.forward(obs)
-        if is_first:
-            is_first = torch.ones(1, 1).to(torch.int32).to(self._device)
-        else:
-            is_first = torch.zeros(1, 1).to(torch.int32).to(self._device)
         if len(prev_action.shape) == 1:
             prev_action = prev_action.unsqueeze(0)
         latent_components = self._rssm.obs_step(
-            prev_action, encoded_obs, is_first, prev_deter, prev_stoch
+            prev_action,
+            encoded_obs,
+            prev_deter,
+            prev_stoch,
+            sample_latent,
         )
         return latent_components["deter"], latent_components["post_sample"]
 
@@ -448,7 +455,8 @@ class WorldModel:
         self,
         prev_actions: torch.Tensor,
         encoded_obs: torch.Tensor,
-        is_first_mask: torch.Tensor,
+        prev_deter: torch.Tensor,
+        prev_stoch: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         """
         Computes the (posterior) latent state sequence for a sequence of encoded observations
@@ -461,10 +469,15 @@ class WorldModel:
             encoded_obs (torch.Tensor) of shape (B, T, encoded_dim). Encoded observation
             sequence.
 
-            is_first_mask (torch.Tensor) of shape (B, T). 1 whenever the timestep is to
-            be treated as the first step in the sequences, else, 0.
+            prev_deter (torch.Tensor) of shape (B, deter_dim). Previous deterministic
+            component for the step before the start step of this sequence.
+
+            prev_stoch (torch.Tensor) of shape (B, n_dists, n_cats). Previous stochastic
+            component of the step before the start step of this sequence.
         """
-        return self._rssm.observe_sequence(prev_actions, encoded_obs, is_first_mask)
+        return self._rssm.observe_sequence(
+            prev_actions, encoded_obs, prev_deter, prev_stoch
+        )
 
     def train(
         self, data: Dict[str, torch.Tensor]
@@ -484,61 +497,65 @@ class WorldModel:
             of metircs used for logging purposes.
 
         """
-        encoded_obs = self._encoder.forward(data)
-        B, T = encoded_obs.shape[0], encoded_obs.shape[1]
-        if "encoder" not in self._grad_components:
-            encoded_obs = encoded_obs.detach()
+        with torch.autocast(device_type="cuda"):
+            encoded_obs = self._encoder.forward(data)
+            B, T = encoded_obs.shape[0], encoded_obs.shape[1]
+            if "encoder" not in self._grad_components:
+                encoded_obs = encoded_obs.detach()
 
-        latent_components = self._rssm.observe_sequence(
-            data["prev_action"], encoded_obs, data["is_first"]
-        )
-
-        post_latent = combine_det_and_stoch(
-            latent_components["deter"], latent_components["post_sample"]
-        )
-
-        decoder_deter = (
-            latent_components["deter"]
-            if "decoder" in self._grad_components
-            else latent_components["deter"].detach()
-        )
-        decoder_stoch = (
-            latent_components["post_sample"]
-            if "decoder" in self._grad_components
-            else latent_components["post_sample"].detach()
-        )
-        reconstructed_obs = self._decoder.forward(decoder_deter, decoder_stoch)
-
-        reward_dist = None
-        continue_dist = None
-
-        if self._reward_network is not None:
-            reward_in = (
-                post_latent
-                if "reward" in self._grad_components
-                else post_latent.detach()
+            latent_components = self._rssm.observe_sequence(
+                data["prev_action"],
+                encoded_obs,
+                data["prev_deter"][:, 0],
+                data["prev_stoch"][:, 0],
             )
-            reward_in = reward_in.reshape((B * T, *reward_in.shape[2:]))
-            reward_out = self._reward_network.forward(reward_in)
-            assert self._reward_head is not None
-            reward_dist = self._reward_head.forward(reward_out)
-            assert isinstance(reward_dist, TwoHotDist)
 
-        if self._continue_network is not None:
-            continue_in = (
-                post_latent
-                if "continue" in self._grad_components
-                else post_latent.detach()
+            post_latent = combine_det_and_stoch(
+                latent_components["deter"], latent_components["post_sample"]
             )
-            continue_in = continue_in.reshape((B * T, *continue_in.shape[2:]))
-            continue_out = self._continue_network.forward(continue_in)
-            assert self._continue_head is not None
-            continue_dist = self._continue_head.forward(continue_out)
-            assert isinstance(continue_dist, BernoulliDist)
 
-        loss, metrics = self._compute_loss(
-            data, latent_components, reconstructed_obs, reward_dist, continue_dist
-        )
+            decoder_deter = (
+                latent_components["deter"]
+                if "decoder" in self._grad_components
+                else latent_components["deter"].detach()
+            )
+            decoder_stoch = (
+                latent_components["post_sample"]
+                if "decoder" in self._grad_components
+                else latent_components["post_sample"].detach()
+            )
+            reconstructed_obs = self._decoder.forward(decoder_deter, decoder_stoch)
+
+            reward_dist = None
+            continue_dist = None
+
+            if self._reward_network is not None:
+                reward_in = (
+                    post_latent
+                    if "reward" in self._grad_components
+                    else post_latent.detach()
+                )
+                reward_in = reward_in.reshape((B * T, *reward_in.shape[2:]))
+                reward_out = self._reward_network.forward(reward_in)
+                assert self._reward_head is not None
+                reward_dist = self._reward_head.forward(reward_out)
+                assert isinstance(reward_dist, TwoHotDist)
+
+            if self._continue_network is not None:
+                continue_in = (
+                    post_latent
+                    if "continue" in self._grad_components
+                    else post_latent.detach()
+                )
+                continue_in = continue_in.reshape((B * T, *continue_in.shape[2:]))
+                continue_out = self._continue_network.forward(continue_in)
+                assert self._continue_head is not None
+                continue_dist = self._continue_head.forward(continue_out)
+                assert isinstance(continue_dist, BernoulliDist)
+
+            loss, metrics = self._compute_loss(
+                data, latent_components, reconstructed_obs, reward_dist, continue_dist
+            )
 
         return (
             loss,

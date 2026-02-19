@@ -444,7 +444,8 @@ class RSSM:
         self,
         prev_actions: torch.Tensor,
         encoded_obs: torch.Tensor,
-        is_first_mask: torch.Tensor,
+        prev_deter: torch.Tensor,
+        prev_stoch: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -454,13 +455,17 @@ class RSSM:
             encoded_obs (torch.Tensor): encoder output for observations at each timestep
             of shape (B, T, self._encoded_size)
 
-            is_first_mask (torch.Tensor): Mask of 1s whenever the current timestep is the
-            first timestep in the sequence. Shape (B, T, 1)
+            prev_deter (torch.Tensor) of shape (B, deter_dim). Previous deterministic
+            component for the step before the start step of this sequence.
+
+            prev_stoch (torch.Tensor) of shape (B, n_dists, n_cats). Previous stochastic
+            component of the step before the start step of this sequence.
+
         """
         B, T, _ = prev_actions.shape
 
         # Initialize previous hidden states
-        prev_deter, prev_post = None, None
+        prev_deter, prev_post = prev_deter, prev_stoch
 
         # Prepare storage for outputs
         seq_outputs = {
@@ -475,12 +480,10 @@ class RSSM:
         for t in range(T):
             prev_action_t = prev_actions[:, t]
             encoded_obs_t = encoded_obs[:, t]
-            is_first_t = is_first_mask[:, t]
 
             out = self.obs_step(
                 prev_action=prev_action_t,
                 encoded_obs=encoded_obs_t,
-                is_first=is_first_t,
                 prev_deter=prev_deter,
                 prev_post=prev_post,
             )
@@ -501,9 +504,9 @@ class RSSM:
         self,
         prev_action: torch.Tensor,
         encoded_obs: torch.Tensor,
-        is_first: torch.Tensor,
-        prev_deter: Optional[torch.Tensor] = None,
-        prev_post: Optional[torch.Tensor] = None,
+        prev_deter: torch.Tensor,
+        prev_post: torch.Tensor,
+        sample_latent: bool = True,
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -511,20 +514,7 @@ class RSSM:
 
             encoded_obs (torch.Tensor): current encoded obs of shape (B, self._encoded_size)
 
-            is_first (torch.Tensor): mask for if current state is the first in a trajectory.
-            of shape (B, 1)
         """
-        assert (prev_deter is None) == (prev_post is None), (
-            "prev_deter and prev_post must either both be None or both not None"
-        )
-        # Don't need the or, but needed to make Pyright behave.
-        if prev_deter is None or prev_post is None:
-            prev_deter, prev_post = self._get_initial_state(prev_action.shape[0])
-
-        # Make zeros wherever is_first is == 1 denoting start of trajectory
-        prev_deter = self._handle_is_first(prev_deter, is_first)
-        prev_post = self._handle_is_first(prev_post, is_first)
-        prev_action = self._handle_is_first(prev_action, is_first)
 
         # (B, n_dist, n_cats) -> (B, n_dist * n_cats)
         prev_post = prev_post.reshape(prev_post.shape[0], self._stoch_dim)
@@ -533,9 +523,13 @@ class RSSM:
         prior_dist = self._get_prior_dist(deter)
         post_dist = self._get_post_dist(deter, encoded_obs)
 
-        # Samples are of shape (B, n_dist, n_cats)
-        prior_sample = prior_dist.sample()
-        post_sample = post_dist.sample()
+        if sample_latent:
+            # Samples are of shape (B, n_dist, n_cats)
+            prior_sample = prior_dist.sample()
+            post_sample = post_dist.sample()
+        else:
+            prior_sample = prior_dist.mode
+            post_sample = post_dist.mode
 
         prior_logits = prior_dist.logits
         post_logits = post_dist.logits

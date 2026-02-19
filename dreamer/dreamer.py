@@ -132,8 +132,8 @@ class Dreamer:
         self._train_truncated = False
         self._train_done = True
         self._train_prev_action = torch.zeros(self._n_actions * self._action_dim)
-        self._train_prev_deter = None
-        self._train_prev_stoch = None
+        self._train_prev_deter = self._world_model.get_init_deter()
+        self._train_prev_stoch = self._world_model.get_init_stoch()
         self._train_obs = {}
         self._train_episode_reward = 0.0
 
@@ -386,8 +386,8 @@ class Dreamer:
                 self._train_prev_action = torch.zeros(
                     self._n_actions * self._action_dim
                 )
-                self._train_prev_deter = None
-                self._train_prev_stoch = None
+                self._train_prev_deter = self._world_model.get_init_deter()
+                self._train_prev_stoch = self._world_model.get_init_stoch()
 
                 self._print_losses()
                 self._wandb_run.log(
@@ -411,7 +411,6 @@ class Dreamer:
                 deter, stoch = self._world_model.get_posterior(
                     tensor_obs,
                     self._train_prev_action.clone().detach().to(self._device),
-                    self._train_first_step,
                     self._train_prev_deter,
                     self._train_prev_stoch,
                 )
@@ -458,6 +457,16 @@ class Dreamer:
                 "is_first": int(self._train_first_step),
                 "continue": float(not self._train_terminated),
                 "episode_id": self._episode_id,
+                "prev_deter": (
+                    self._train_prev_deter
+                    if self._train_prev_deter is not None
+                    else self._world_model.get_init_deter()
+                ).squeeze(),
+                "prev_stoch": (
+                    self._train_prev_stoch
+                    if self._train_prev_stoch is not None
+                    else self._world_model.get_init_stoch()
+                ).squeeze(),
             }
 
             for k in self._keys_to_store:
@@ -487,8 +496,8 @@ class Dreamer:
         for episode in range(n_episodes):
             obs, info = self._eval_env.reset()
             first_step = True
-            prev_deter = None
-            prev_stoch = None
+            prev_deter = self._world_model.get_init_deter()
+            prev_stoch = self._world_model.get_init_stoch()
             prev_action = torch.zeros((self._n_actions * self._action_dim)).squeeze()
             done = False
             episode_reward = 0.0
@@ -506,7 +515,6 @@ class Dreamer:
                 deter, stoch = self._world_model.get_posterior(
                     tensor_obs,
                     torch.tensor(prev_action).to(self._device),
-                    first_step,
                     prev_deter,
                     prev_stoch,
                 )

@@ -245,7 +245,15 @@ def configure_buffer(config: DictConfig) -> Tuple[Buffer, List[str]]:
     added to the buffer.
     """
 
-    keys_to_sample = ["reward", "is_first", "prev_action", "continue", "episode_id"]
+    keys_to_sample = [
+        "reward",
+        "is_first",
+        "prev_action",
+        "continue",
+        "episode_id",
+        "prev_deter",
+        "prev_stoch",
+    ]
     keys_to_sample.extend(config.env.image_keys)
     keys_to_sample.extend(config.env.vector_keys)
     keys_to_sample.extend(config.env.extra_keys)

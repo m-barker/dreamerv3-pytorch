@@ -169,109 +169,113 @@ class Behaviour(nn.Module):
             Tuple[torch.Tensor, torch.Tensor, Dict]: actor loss and critic loss, averaged
             over batch and time dimensions, and metrics used for logging.
         """
-        self._update_slow_target()
-        metrics = {}
-        with torch.no_grad():
-            out = world_model.imagine_sequence(
-                starting_deter.detach(),
-                starting_stoch.detach(),
-                self._training_params.imag_horizon,
-                self._actor.forward_sample,
+        with torch.autocast(device_type="cuda"):
+            self._update_slow_target()
+            metrics = {}
+            with torch.no_grad():
+                out = world_model.imagine_sequence(
+                    starting_deter.detach(),
+                    starting_stoch.detach(),
+                    self._training_params.imag_horizon,
+                    self._actor.forward_sample,
+                )
+            # Shape (B, H, D) contains the prev_action, so out["action"][0] corresponds to the
+            # prev action for out["deter"][1]
+            imagined_actions = out["action"]
+
+            # Shape (B, H + 1, D)
+            imagined_latents = combine_det_and_stoch(
+                out["deter"], out["prior_sample"]
+            ).detach()
+
+            policy = self._actor(imagined_latents[:, :-1])
+
+            # Shape (B, H + 1, 1)
+            imagined_value = self._critic.forward_and_pred(imagined_latents)
+
+            metrics["mean_imagined_value"] = imagined_value.mean()
+            metrics["max_imagined_value"] = imagined_value.max()
+            metrics["min_imagined_value"] = imagined_value.min()
+
+            if reward_func is not None:
+                imagined_reward = reward_func(imagined_latents)
+            else:
+                with torch.no_grad():
+                    imagined_reward = world_model.predict_reward(imagined_latents)
+
+            metrics["mean_imagined_reward"] = imagined_reward.mean()
+            metrics["max_imagined_reward"] = imagined_reward.max()
+            metrics["min_imagined_reward"] = imagined_reward.min()
+
+            if continue_func is not None:
+                imagined_cont = continue_func(imagined_latents)
+            else:
+                with torch.no_grad():
+                    imagined_cont = world_model.predict_cont(
+                        imagined_latents, soft=True
+                    )
+
+            metrics["mean_imagined_continue"] = imagined_cont.mean()
+            metrics["max_imagined_continue"] = imagined_cont.max()
+            metrics["min_imagined_continue"] = imagined_cont.min()
+
+            # Shape (B, H)
+            ret = self._lambda_return(
+                imagined_reward.squeeze(), imagined_value.squeeze(), imagined_cont
             )
-        # Shape (B, H, D) contains the prev_action, so out["action"][0] corresponds to the
-        # prev action for out["deter"][1]
-        imagined_actions = out["action"]
 
-        # Shape (B, H + 1, D)
-        imagined_latents = combine_det_and_stoch(
-            out["deter"], out["prior_sample"]
-        ).detach()
+            metrics["mean_lambda_return"] = ret.mean()
+            metrics["max_lambda_return"] = ret.max()
+            metrics["min_lambda_return"] = ret.min()
 
-        policy = self._actor(imagined_latents[:, :-1])
+            ret_offset = 0.0
+            ret_scale = 1.0
+            if self._ret_norm is not None:
+                ret_offset, ret_scale = self._ret_norm(ret, self.ret_norm_vals)
+            advantage = (ret - imagined_value[:, :-1].squeeze()) / ret_scale
 
-        # Shape (B, H + 1, 1)
-        imagined_value = self._critic.forward_and_pred(imagined_latents)
+            metrics["mean_advantage"] = advantage.mean()
+            metrics["max_advantage"] = advantage.max()
+            metrics["min_advantage"] = advantage.min()
 
-        metrics["mean_imagined_value"] = imagined_value.mean()
-        metrics["max_imagined_value"] = imagined_value.max()
-        metrics["min_imagined_value"] = imagined_value.min()
+            logpi = policy.log_prob(imagined_actions.detach())
+            policy_ent = policy.entropy()
+            if len(logpi.shape) == 3:
+                logpi = logpi.sum(-1)
+                assert len(policy_ent.shape) == 3
+                policy_ent = policy_ent.sum(-1)
 
-        if reward_func is not None:
-            imagined_reward = reward_func(imagined_latents)
-        else:
-            with torch.no_grad():
-                imagined_reward = world_model.predict_reward(imagined_latents)
+            metrics["policy_entropy"] = policy_ent.mean()
 
-        metrics["mean_imagined_reward"] = imagined_reward.mean()
-        metrics["max_imagined_reward"] = imagined_reward.max()
-        metrics["min_imagined_reward"] = imagined_reward.min()
+            cum_continue = torch.cumprod(imagined_cont[:, :-1], dim=-1).detach()
+            # Shift the continues right by one, to not mask out the terminal state.
+            cum_continue = torch.cat(
+                [torch.ones_like(cum_continue[:, :1]), cum_continue[:, :-1]], dim=-1
+            ).detach()
+            # REINFORCE - increase logprobs of actions with high advantage
+            policy_loss = cum_continue * -(
+                logpi * advantage.detach()
+                + policy_ent * self._training_params.ent_weight
+            )
 
-        if continue_func is not None:
-            imagined_cont = continue_func(imagined_latents)
-        else:
-            with torch.no_grad():
-                imagined_cont = world_model.predict_cont(imagined_latents, soft=True)
+            B, H, _ = imagined_latents[:, :-1].shape
+            flattened_latents = imagined_latents[:, :-1].reshape((B * H, -1))
+            value_dist = self._critic(flattened_latents)
+            slow_val_dist = self._slow_val_target(flattened_latents)
+            slow_val_pred = slow_val_dist.predict()
 
-        metrics["mean_imagined_continue"] = imagined_cont.mean()
-        metrics["max_imagined_continue"] = imagined_cont.max()
-        metrics["min_imagined_continue"] = imagined_cont.min()
+            metrics["mean_slow_value"] = slow_val_pred.mean()
+            metrics["max_slow_value"] = slow_val_pred.max()
+            metrics["min_slow_value"] = slow_val_pred.min()
 
-        # Shape (B, H)
-        ret = self._lambda_return(
-            imagined_reward.squeeze(), imagined_value.squeeze(), imagined_cont
-        )
+            # Rehsape RET to (B*H, 1)
+            val_loss = value_dist.loss(ret.detach().flatten().unsqueeze(-1))
 
-        metrics["mean_lambda_return"] = ret.mean()
-        metrics["max_lambda_return"] = ret.max()
-        metrics["min_lambda_return"] = ret.min()
-
-        ret_offset = 0.0
-        ret_scale = 1.0
-        if self._ret_norm is not None:
-            ret_offset, ret_scale = self._ret_norm(ret, self.ret_norm_vals)
-        advantage = (ret - imagined_value[:, :-1].squeeze()) / ret_scale
-
-        metrics["mean_advantage"] = advantage.mean()
-        metrics["max_advantage"] = advantage.max()
-        metrics["min_advantage"] = advantage.min()
-
-        logpi = policy.log_prob(imagined_actions.detach())
-        policy_ent = policy.entropy()
-        if len(logpi.shape) == 3:
-            logpi = logpi.sum(-1)
-            assert len(policy_ent.shape) == 3
-            policy_ent = policy_ent.sum(-1)
-
-        metrics["policy_entropy"] = policy_ent.mean()
-
-        cum_continue = torch.cumprod(imagined_cont[:, :-1], dim=-1).detach()
-        # Shift the continues right by one, to not mask out the terminal state.
-        cum_continue = torch.cat(
-            [torch.ones_like(cum_continue[:, :1]), cum_continue[:, :-1]], dim=-1
-        ).detach()
-        # REINFORCE - increase logprobs of actions with high advantage
-        policy_loss = cum_continue * -(
-            logpi * advantage.detach() + policy_ent * self._training_params.ent_weight
-        )
-
-        B, H, _ = imagined_latents[:, :-1].shape
-        flattened_latents = imagined_latents[:, :-1].reshape((B * H, -1))
-        value_dist = self._critic(flattened_latents)
-        slow_val_dist = self._slow_val_target(flattened_latents)
-        slow_val_pred = slow_val_dist.predict()
-
-        metrics["mean_slow_value"] = slow_val_pred.mean()
-        metrics["max_slow_value"] = slow_val_pred.max()
-        metrics["min_slow_value"] = slow_val_pred.min()
-
-        # Rehsape RET to (B*H, 1)
-        val_loss = value_dist.loss(ret.detach().flatten().unsqueeze(-1))
-
-        flattened_cont = cum_continue.reshape((B * H, -1))
-        value_loss = flattened_cont * (
-            val_loss
-            + self._training_params.slow_reg
-            * value_dist.loss(slow_val_pred.unsqueeze(-1))
-        )
+            flattened_cont = cum_continue.reshape((B * H, -1))
+            value_loss = flattened_cont * (
+                val_loss
+                + self._training_params.slow_reg
+                * value_dist.loss(slow_val_pred.unsqueeze(-1))
+            )
 
         return policy_loss.mean(), value_loss.mean(), metrics
