@@ -206,8 +206,8 @@ class Dreamer:
             latent_components = self._world_model.observe_sequence(
                 data["prev_action"],
                 encoded_obs,
-                data["prev_deter"][0, :],
-                data["prev_stoch"][0, :],
+                data["prev_deter"][:, 0],
+                data["prev_stoch"][:, 0],
             )
             # All of shape (B, T, D)
             post_latent = combine_det_and_stoch(
