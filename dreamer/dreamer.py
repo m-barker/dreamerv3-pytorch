@@ -208,6 +208,7 @@ class Dreamer:
                 encoded_obs,
                 data["prev_deter"][:, 0],
                 data["prev_stoch"][:, 0],
+                data["is_first"],
             )
             # All of shape (B, T, D)
             post_latent = combine_det_and_stoch(
