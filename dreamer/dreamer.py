@@ -419,6 +419,7 @@ class Dreamer:
                     self._train_prev_action.clone().detach().to(self._device),
                     self._train_prev_deter,
                     self._train_prev_stoch,
+                    is_first=self._train_first_step,
                 )
                 self._train_prev_deter = deter
                 self._train_prev_stoch = stoch
@@ -523,6 +524,7 @@ class Dreamer:
                     torch.tensor(prev_action).to(self._device),
                     prev_deter,
                     prev_stoch,
+                    is_first=first_step,
                 )
                 prev_deter, prev_stoch = deter, stoch
                 latent_state = combine_det_and_stoch(deter, stoch)

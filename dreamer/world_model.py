@@ -416,6 +416,7 @@ class WorldModel:
         prev_action: torch.Tensor,
         prev_deter: torch.Tensor,
         prev_stoch: torch.Tensor,
+        is_first: bool,
         sample_latent: bool = True,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -432,6 +433,9 @@ class WorldModel:
 
             prev_stoch (torch.Tensor): previous stochastic state.
 
+            is_first (bool). Whether this is the first step of the episode
+            or not.
+
             sample_latent (optional, bool): whether to sample the stochasticv
             component. Defaults to True
 
@@ -442,11 +446,16 @@ class WorldModel:
         encoded_obs = self._encoder.forward(obs)
         if len(prev_action.shape) == 1:
             prev_action = prev_action.unsqueeze(0)
+        if is_first:
+            is_first_tensor = torch.ones(1, 1).to(torch.int32).to(self._device)
+        else:
+            is_first_tensor = torch.zeros(1, 1).to(torch.int32).to(self._device)
         latent_components = self._rssm.obs_step(
             prev_action,
             encoded_obs,
             prev_deter,
             prev_stoch,
+            is_first_tensor,
             sample_latent,
         )
         return latent_components["deter"], latent_components["post_sample"]
@@ -457,6 +466,7 @@ class WorldModel:
         encoded_obs: torch.Tensor,
         prev_deter: torch.Tensor,
         prev_stoch: torch.Tensor,
+        is_first: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         """
         Computes the (posterior) latent state sequence for a sequence of encoded observations
@@ -474,9 +484,12 @@ class WorldModel:
 
             prev_stoch (torch.Tensor) of shape (B, n_dists, n_cats). Previous stochastic
             component of the step before the start step of this sequence.
+
+            is_first (torch.Tensor) of shape (B, T, 1). Mask of zeros and ones where 1
+            denotes that it is the first step in the episode.
         """
         return self._rssm.observe_sequence(
-            prev_actions, encoded_obs, prev_deter, prev_stoch
+            prev_actions, encoded_obs, prev_deter, prev_stoch, is_first
         )
 
     def train(
@@ -508,6 +521,7 @@ class WorldModel:
                 encoded_obs,
                 data["prev_deter"][:, 0],
                 data["prev_stoch"][:, 0],
+                data["is_first"],
             )
 
             post_latent = combine_det_and_stoch(

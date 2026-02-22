@@ -99,7 +99,6 @@ class Buffer:
 
                 remaining -= take_len
             single_batch = torch.cat(chunks, dim=0)
-            single_batch["is_first"][0] = 1.0
             sequences.append(single_batch)
 
         # stack sequences along batch dimension: [B, T, ...]
