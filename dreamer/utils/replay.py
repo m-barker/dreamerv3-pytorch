@@ -3,6 +3,7 @@ import os
 import random
 
 import torch
+import numpy as np
 from tensordict import TensorDict
 from torchrl.data import ReplayBuffer, LazyMemmapStorage, LazyTensorStorage
 
@@ -128,14 +129,20 @@ class Buffer:
     def save_compact(self, path: str):
         length = len(self._buffer)
         td = self._buffer.storage[:length]
-        torch.save(td, os.path.join(path, "buffer.pt"))
+        np_dict = {k: v.detach().cpu().numpy() for k, v in td.items()}
+        np.savez_compressed(os.path.join(path, "buffer.npz"), **np_dict)
 
     def load_compact(self, path: str):
-        path = os.path.join(path, "buffer.pt")
-        if os.path.exists(path):
-            print(f"Loading replay buffer at path: {path}")
-            td = torch.load(path, weights_only=False)
+        file_path = os.path.join(path, "buffer.npz")
+        if os.path.exists(file_path):
+            np_dict = np.load(file_path)
+            td = TensorDict(
+                {k: torch.from_numpy(np_dict[k]) for k in np_dict.files},
+                batch_size=[np_dict["episode_id"].shape[0]],
+            )
             self._buffer.extend(td)
+        else:
+            raise FileNotFoundError(f"File {file_path} not found")
 
     def sample(
         self,

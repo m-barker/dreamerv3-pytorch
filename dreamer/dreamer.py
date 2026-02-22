@@ -372,10 +372,7 @@ class Dreamer:
                 )
             if self._total_env_training_steps % self._config.eval_every == 0:
                 self.step_environment_eval(self._config.n_eval_episodes)
-            if (
-                self._total_env_training_steps % self._config.log_every == 0
-                and self._config.save_replay
-            ):
+            if self._total_env_training_steps % self._config.log_every == 0:
                 self._train_log()
             if (
                 self._total_env_training_steps % self._config.save_every == 0
