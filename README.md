@@ -62,7 +62,6 @@ Adding new environments should be straightfoward. Simply create a wrappper, foll
 The vast majority of the tips and tricks used in the official Dreamer V3 implementation have been implemented here. However, there are still some missing features that may or may not be added in the future, which can cause some difference to the official JAX version:
 
 - Parallel environments. This is the big one in terms of speed for any environments which are slow to step. At the moment, there is a single training environment for simplicity.
-- Replay Context. The official Dreamer V3 uses a 'replay context' length of 1 to 'warm-up' the latent state on the replay buffer sample used to train the world model. Essentially, since a replay buffer sample can start in the middle of the episode, this context uses the previous time step's observation to create the initial latent state. Without this, the initial latent state is simply set to a zero vector, which is what this repository does always.
 - Replay Loss. The official implementation uses an additional Critic loss that is trained on samples from the replay buffer as well as imagined states. This is not yet implemented here.
 - Optimiser. The official implementation uses adaptive gradient clipping combined with LaProp. We instead currently opt for a simpler Adam-based optimiser at the moment.
 
