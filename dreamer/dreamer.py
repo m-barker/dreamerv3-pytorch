@@ -124,7 +124,7 @@ class Dreamer:
         if self._config.load_existing:
             self.load_checkpoint(self._config.load_existing_path)
 
-        self._total_env_training_steps = len(self._replay_buffer) * self._action_repeat
+        self._total_env_training_steps = len(self._replay_buffer)
         self._episode_id = 0
 
         self._train_first_step = True
@@ -175,7 +175,7 @@ class Dreamer:
 
         self._logs.append({"env_step": self._total_env_training_steps, **log_dict})
 
-        self._wandb_run.log(log_dict, step=self._total_env_training_steps)
+        self._wandb_run.log(log_dict, step=self._total_env_training_steps * self._action_repeat)
 
     def _log_video(self, image_sequence: List[np.ndarray]) -> None:
         video_array = np.array(image_sequence)
@@ -183,7 +183,7 @@ class Dreamer:
         video_array = video_array.transpose(0, 3, 1, 2)
         self._wandb_run.log(
             {"evaluation/video_policy": wandb.Video(video_array, fps=4, format="mp4")},
-            step=self._total_env_training_steps,
+            step=self._total_env_training_steps * self._action_repeat,
         )
 
     def _log_wm_predictions_plot(
@@ -328,7 +328,7 @@ class Dreamer:
         plt.tight_layout()
         self._wandb_run.log(
             {"evaluation/wm_pred": wandb.Image(fig)},
-            step=self._total_env_training_steps,
+            step=self._total_env_training_steps * self._action_repeat,
         )
         plt.close(fig)
 
@@ -399,7 +399,7 @@ class Dreamer:
                 self._print_losses()
                 self._wandb_run.log(
                     {"train_ret": self._train_episode_reward},
-                    step=self._total_env_training_steps,
+                    step=self._total_env_training_steps * self._action_repeat,
                 )
                 self._logs.append(
                     {
@@ -458,7 +458,7 @@ class Dreamer:
                 )
                 self._train_first_step = False
 
-            self._total_env_training_steps += 1 * self._action_repeat
+            self._total_env_training_steps += 1
             transition = {
                 "prev_action": self._train_prev_action,
                 "reward": reward,
@@ -548,7 +548,7 @@ class Dreamer:
         print(f"Mean eval reward: {mean_eval_reward}")
         self._wandb_run.log(
             {"evaluation/eval_ret": mean_eval_reward},
-            step=self._total_env_training_steps,
+            step=self._total_env_training_steps * self._action_repeat,
         )
         self._logs.append(
             {"env_step": self._total_env_training_steps, "eval_ret": mean_eval_reward}
@@ -582,7 +582,7 @@ class Dreamer:
         env_steps_per_model_batch = (
             model_steps_per_batch // self._config.env.model_steps_per_env_step
         )
-        while self._total_env_training_steps < self._config.total_steps:
+        while self._total_env_training_steps * self._action_repeat < self._config.total_steps:
             start_time = time.perf_counter()
             training_data = self._replay_buffer.sample(
                 self._config.batch_size, self._config.batch_length, self._device
